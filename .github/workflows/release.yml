@@ -1,0 +1,20 @@
+name: Release Cloudflare MKP
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: haxe18/Check_MK-plugin_mpk_action/.github/workflows/reusable_release.yml@main
+    with:
+      plugin_name: "cloudflare"
+      title: "Cloudflare Monitoring"
+      description: "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics."
+      tag_prefix: "v"
+      changelog_filter_path: "cloudflare/"
+    secrets: inherit

@@ -1,0 +1,72 @@
+name: Monthly Cloudflare Limits Check
+
+on:
+  schedule:
+    - cron: '44 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: monthly-limits-check
+  cancel-in-progress: false
+
+jobs:
+  check-and-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install google-genai
+
+      - name: Prepare metadata
+        id: meta
+        run: |
+          echo "ym=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh limits from docs
+        id: refresh
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          result=$(python3 scripts/update_limits_from_docs.py --write)
+          changed=$(echo "$result" | jq -r '.changed')
+          changelog=$(echo "$result" | jq -r '.changelog')
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          {
+            echo "changelog<<EOF"
+            echo "$changelog"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Pull Request
+        if: steps.refresh.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/monthly-limits-update-${{ steps.meta.outputs.ym }}
+          base: main
+          commit-message: "chore(limits): refresh Cloudflare limits (${{ steps.meta.outputs.ym }})"
+          title: "chore(limits): monthly Cloudflare limits refresh (${{ steps.meta.outputs.ym }})"
+          body: |
+            Automated monthly limits update.
+
+            ${{ steps.refresh.outputs.changelog }}
+
+            If merged, the `tag-on-merged-limits-pr` workflow will create the next `vX.Y.Z` tag on the merge commit.
+          labels: |
+            automation
+            limits
+          delete-branch: true

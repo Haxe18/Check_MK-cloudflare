@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Checkmk special agent for Cloudflare monitoring.
+
+This script is the entry point for the Cloudflare special agent.
+It uses the CloudflareOrchestrator to coordinate all service sections.
+"""
+
+import argparse
+import json
+import logging
+import sys
+import time
+from pathlib import Path
+
+# Handle imports for both development and installed scenarios
+try:
+    # Try installed location first (MKP package)
+    from cmk_addons.plugins.cloudflare.lib.constants import (
+        DEFAULT_CACHE_TTL,
+        DEFAULT_DISCOVERY_TTL,
+        DEFAULT_TIMEFRAME,
+        TIMEFRAME_1H,
+        TIMEFRAME_5M,
+        TIMEFRAME_6H,
+        TIMEFRAME_15M,
+        TIMEFRAME_24H,
+    )
+    from cmk_addons.plugins.cloudflare.lib.orchestrator import CloudflareOrchestrator
+    from cmk_addons.plugins.cloudflare.lib.services import (
+        ALL_SERVICES,
+        DEFAULT_SERVICES,
+    )
+except ImportError:
+    # Fall back to local development path
+    script_dir = Path(__file__).parent.parent
+    sys.path.insert(0, str(script_dir))
+    from lib.constants import (
+        DEFAULT_CACHE_TTL,
+        DEFAULT_DISCOVERY_TTL,
+        DEFAULT_TIMEFRAME,
+        TIMEFRAME_1H,
+        TIMEFRAME_5M,
+        TIMEFRAME_6H,
+        TIMEFRAME_15M,
+        TIMEFRAME_24H,
+    )
+    from lib.orchestrator import CloudflareOrchestrator
+    from lib.services import ALL_SERVICES, DEFAULT_SERVICES
+
+# Available timeframes for argument choices
+AVAILABLE_TIMEFRAMES = [TIMEFRAME_5M, TIMEFRAME_15M, TIMEFRAME_1H, TIMEFRAME_6H, TIMEFRAME_24H]
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments.
+
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(
+        description="Cloudflare monitoring special agent for Checkmk"
+    )
+
+    parser.add_argument(
+        "--api-token",
+        required=True,
+        help="Cloudflare API token",
+    )
+
+    parser.add_argument(
+        "--account-id",
+        required=True,
+        help="Cloudflare account ID",
+    )
+
+    parser.add_argument(
+        "--services",
+        type=str,
+        default=json.dumps(DEFAULT_SERVICES),
+        help=f"JSON list of services to monitor (default: {DEFAULT_SERVICES}). "
+             f"Available: {ALL_SERVICES}",
+    )
+
+    parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=DEFAULT_CACHE_TTL,
+        help=f"Metrics cache TTL in seconds (default: {DEFAULT_CACHE_TTL})",
+    )
+
+    parser.add_argument(
+        "--discovery-ttl",
+        type=int,
+        default=DEFAULT_DISCOVERY_TTL,
+        help=f"Discovery cache TTL in seconds (default: {DEFAULT_DISCOVERY_TTL})",
+    )
+
+    parser.add_argument(
+        "--timeframe",
+        default=DEFAULT_TIMEFRAME,
+        choices=AVAILABLE_TIMEFRAMES,
+        help=f"Analytics timeframe (default: {DEFAULT_TIMEFRAME})",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching (for testing)",
+    )
+
+    return parser.parse_args()
+
+
+def _print_cloudflare_section(payload: dict, cache_ttl: int) -> None:
+    """Print Checkmk section header and JSON payload.
+
+    Args:
+        payload: Section payload to print as JSON.
+        cache_ttl: Cache TTL value for the section header.
+    """
+    cache_timestamp = int(time.time())
+    print(f"<<<cloudflare:sep(0):cached({cache_timestamp},{cache_ttl})>>>")
+    print(json.dumps(payload))
+
+
+def main() -> None:
+    """Main entry point for the Cloudflare special agent."""
+    args = parse_arguments()
+
+    # Set up logging level
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
+    # Parse services list
+    try:
+        services = json.loads(args.services)
+        if not isinstance(services, list):
+            services = DEFAULT_SERVICES
+    except json.JSONDecodeError:
+        print("Warning: Invalid services JSON, using defaults", file=sys.stderr)
+        services = DEFAULT_SERVICES
+
+    # Validate services
+    valid_services = [s for s in services if s in ALL_SERVICES]
+    if not valid_services:
+        print("Warning: No valid services specified, using defaults", file=sys.stderr)
+        valid_services = DEFAULT_SERVICES
+
+    # Handle --no-cache flag
+    cache_ttl = 0 if args.no_cache else args.cache_ttl
+    discovery_ttl = 0 if args.no_cache else args.discovery_ttl
+
+    # Create and run orchestrator
+    try:
+        orchestrator = CloudflareOrchestrator(
+            api_token=args.api_token,
+            account_id=args.account_id,
+            services=valid_services,
+            cache_ttl=cache_ttl,
+            discovery_ttl=discovery_ttl,
+            timeframe=args.timeframe,
+        )
+
+        result = orchestrator.run()
+        _print_cloudflare_section(result, cache_ttl)
+
+    except Exception as exc:
+        # Output error as valid section so check can handle it
+        error_output = {
+            "CloudflareMetrics": {},
+            "CloudflareAPICounter": {"error": str(exc)},
+            "CloudflareConfig": {
+                "services": valid_services,
+                "error": str(exc),
+            },
+            "CloudflareErrors": [str(exc)],
+        }
+        _print_cloudflare_section(error_output, cache_ttl)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,35 @@
+title: Cloudflare
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors Cloudflare resources including:
+
+ - Workers: Script analytics (requests, errors, CPU time P50/P99)
+ - KV Namespaces: Operations (reads, writes, deletes, lists), key count
+ - DNS Zones: Zone status (active/paused)
+ - R2 Buckets: Bucket location and status
+ - Zone Analytics: HTTP requests, bandwidth, threats, cache hit ratio
+ - DNS Analytics: Query count, response time, response codes
+ - WAF Events: Security events (blocked, challenged)
+ - Page Rules: Rule count and status
+ - Cloudflare Access: Applications and policies
+ - Cloudflare Tunnel: Tunnel status and connections
+ - Load Balancers: Pool health and origin status
+
+ The check uses the Cloudflare REST API and GraphQL API to retrieve
+ current status data and analytics for all configured services.
+
+ Configuration options in WATO:
+ - API Token: Cloudflare API authentication
+ - Account ID: Your Cloudflare account identifier
+ - Services: Select which services to monitor
+ - Cache TTL: Metrics cache duration (default: 300s)
+ - Discovery TTL: Resource discovery cache duration (default: 3600s)
+ - Analytics Timeframe: 5m, 15m, 1h, 6h, or 24h
+
+discovery:
+ One service is created for each discovered Cloudflare resource
+ (Worker, KV Namespace, Zone, R2 Bucket, Access App, Tunnel, LB Pool).
+ Additionally, an API Usage service tracks API calls made by the agent.

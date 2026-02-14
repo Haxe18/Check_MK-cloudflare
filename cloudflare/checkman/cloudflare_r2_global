@@ -1,0 +1,12 @@
+title: Cloudflare R2 Global
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors the overall Cloudflare R2 usage for the account.
+ It reports total storage usage against the included free tier
+ (10 GiB/month) and supports optional free-tier monitoring.
+
+discovery:
+ One service is created per Cloudflare account.

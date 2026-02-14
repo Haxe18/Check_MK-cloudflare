@@ -1,0 +1,12 @@
+title: Cloudflare KV
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors Cloudflare Workers KV namespaces.
+ It reports storage usage, key count, and read/write operations
+ for each KV namespace.
+
+discovery:
+ One service is created for each KV namespace.

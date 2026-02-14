@@ -1,0 +1,12 @@
+title: Cloudflare WAF
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors Cloudflare Web Application Firewall (WAF).
+ It reports the number of active WAF rules, managed rulesets,
+ and firewall events for each zone.
+
+discovery:
+ One service is created for each zone with WAF enabled.

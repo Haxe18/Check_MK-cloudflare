@@ -1,0 +1,64 @@
+name: Tag On Merged Limits PR
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-on-merged-limits-pr
+  cancel-in-progress: false
+
+jobs:
+  tag-release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'automation/monthly-limits-update-') &&
+      contains(github.event.pull_request.labels.*.name, 'limits')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next tag
+        id: next
+        shell: bash
+        run: |
+          latest_tag=$(git tag -l 'v*' --sort=-version:refname | head -n 1)
+          if [ -z "$latest_tag" ]; then
+            latest_tag="v0.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+          patch=$((patch + 1))
+          next_tag="v${major}.${minor}.${patch}"
+
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "next_tag=$next_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          NEXT_TAG: ${{ steps.next.outputs.next_tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        shell: bash
+        run: |
+          if git rev-parse "$NEXT_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEXT_TAG already exists, skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$NEXT_TAG" "$MERGE_SHA" -m "Release $NEXT_TAG (monthly limits update)"
+          git push origin "$NEXT_TAG"
+
+      - name: Summary
+        run: |
+          echo "Created tag ${{ steps.next.outputs.next_tag }} on merged limits PR"

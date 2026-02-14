@@ -1,0 +1,12 @@
+title: Cloudflare Load Balancer
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors Cloudflare Load Balancers.
+ It reports the health status of load balancers and their
+ origin pools, including healthy and unhealthy origin counts.
+
+discovery:
+ One service is created for each load balancer.

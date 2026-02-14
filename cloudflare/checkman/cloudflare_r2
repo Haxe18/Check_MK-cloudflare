@@ -1,0 +1,12 @@
+title: Cloudflare R2
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors Cloudflare R2 storage buckets.
+ It reports storage usage, object count, and operations
+ (reads, writes, deletes) for each R2 bucket.
+
+discovery:
+ One service is created for each R2 bucket.

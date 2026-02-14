@@ -1,0 +1,13 @@
+title: Cloudflare KV Global
+agents: cloudflare
+catalog: cloud/cloudflare
+license: WTFPL
+distribution: check_mk
+description:
+ This check monitors the overall Cloudflare KV usage for the account.
+ It reports daily reads/writes/deletes/lists against included free-tier
+ thresholds (Free: 100K reads, 1K writes/deletes/lists per day).
+ Paid plans are usage-based and free-tier monitoring can be disabled in the ruleset.
+
+discovery:
+ One service is created per Cloudflare account.
