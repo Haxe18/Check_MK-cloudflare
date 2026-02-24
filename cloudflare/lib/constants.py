@@ -73,6 +73,14 @@ WATO_TIMEFRAME_MAP = {
 CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4"
 CLOUDFLARE_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
 
+# Cloudflare API error code 9109: "Unauthorized to access requested resource" for a
+# missing permission, "Invalid access token" for an invalid token
+CLOUDFLARE_ERROR_CODE_UNAUTHORIZED = 9109
+
+# Cloudflare API error codes sent when the token lacks a permission:
+# 10000 "Authentication error" (also sent for an invalid token), 9109 (see above)
+CLOUDFLARE_PERMISSION_ERROR_CODES = (10000, CLOUDFLARE_ERROR_CODE_UNAUTHORIZED)
+
 # API endpoint types for rate limiting
 ENDPOINT_TYPE_DEFAULT = "default"
 ENDPOINT_TYPE_GRAPHQL = "graphql"

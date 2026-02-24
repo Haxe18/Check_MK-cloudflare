@@ -432,12 +432,14 @@ errors = self.error_collector.get_and_clear()  # Returns list[dict] and clears
 REST API errors (including 403 permission errors) are collected with category "api" and service "rest":
 
 1. `_rest_get()` adds errors via `self.error_collector.add("api", "rest", ...)`
-2. Permission errors (403) include helpful hints about required permissions
-3. Errors appear in `CloudflareErrors` array in agent output
+2. Permission errors include helpful hints about required permissions. Counted as permission errors: any HTTP 403, code 10000 ("Authentication error", also sent for an invalid token) and code 9109 ("Unauthorized to access requested resource")
+3. Code 9109 with "Invalid access token" is reported as `Invalid API token: <endpoint>` without a hint
+4. Errors appear in `CloudflareErrors` array in agent output
 
-Example error message:
+Example error messages:
 ```
 Permission denied: zones/xxx/settings/ssl (needs 'Zone > Zone Settings > Read')
+Invalid API token: zones
 ```
 
 ### Permission Hints

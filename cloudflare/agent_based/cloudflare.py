@@ -36,6 +36,17 @@ def parse_cloudflare(string_table: list[list[str]]) -> dict[str, Any]:
             }
 
         parsed = json.loads(raw_json)
+        if not isinstance(parsed, dict):
+            return {
+                "CloudflareMetrics": {},
+                "CloudflareAPICounter": {
+                    "error": f"Unexpected JSON payload type: {type(parsed).__name__}"
+                },
+                "CloudflareConfig": {},
+                "CloudflareErrors": [],
+                "CloudflareSkippedProFeatures": {},
+                "CloudflareUnusedPermissions": {},
+            }
         return {
             "CloudflareMetrics": parsed.get("CloudflareMetrics", {}),
             "CloudflareAPICounter": parsed.get("CloudflareAPICounter", {}),
@@ -73,7 +84,9 @@ def discover_cloudflare_api_counter(section: dict[str, Any]) -> DiscoveryResult:
         Service for API counter if data is available
     """
     api_counter = section.get("CloudflareAPICounter", {})
-    if api_counter and "requests_made" in api_counter:
+    if not isinstance(api_counter, dict):
+        return
+    if "requests_made" in api_counter or "error" in api_counter:
         yield Service()
 
 
@@ -101,6 +114,8 @@ def check_cloudflare_api_counter(
             state=State.CRIT,
             summary=f"Agent error: {api_counter['error']}",
         )
+        # Keep the API error graph continuous: the agent error counts as one error
+        yield Metric("cloudflare_api_errors", 1)
         return
 
     requests_made = api_counter.get("requests_made", 0)
@@ -117,7 +132,10 @@ def check_cloudflare_api_counter(
     ]
 
     # Filter errors based on ignore patterns (match on message field)
-    ignore_patterns = params.get("ignore_error_patterns", [])
+    ignore_patterns_param = params.get("ignore_error_patterns", [])
+    ignore_patterns = [
+        pattern for pattern in ignore_patterns_param if isinstance(pattern, str) and pattern
+    ]
     active_errors: list[dict[str, Any]] = []
     ignored_errors: list[dict[str, Any]] = []
 
@@ -191,6 +209,7 @@ def check_cloudflare_api_counter(
 
     # Yield metrics
     yield Metric("cloudflare_api_requests", requests_made)
+    yield Metric("cloudflare_api_errors", len(active_errors))
     yield Metric("cloudflare_api_elapsed_time", elapsed_seconds)
 
     # Per-type metrics

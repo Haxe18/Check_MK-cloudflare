@@ -23,6 +23,9 @@ from .cloudflare_helpers import (
     format_bytes,
     format_count,
     get_resource_id_by_name,
+    metric_float,
+    metric_int,
+    metric_metadata,
 )
 
 # Special resource ID for account-wide usage
@@ -88,29 +91,29 @@ def check_cloudflare_kv(
         return
 
     # Extract metric values
-    reads = metrics.get("reads", {}).get("value", 0)
-    writes = metrics.get("writes", {}).get("value", 0)
-    deletes = metrics.get("deletes", {}).get("value", 0)
-    lists = metrics.get("lists", {}).get("value", 0)
-    key_count = metrics.get("key_count", {}).get("value", 0)
-    storage_bytes = metrics.get("storage_bytes", {}).get("value", 0)
+    reads = metric_int(metrics, "reads")
+    writes = metric_int(metrics, "writes")
+    deletes = metric_int(metrics, "deletes")
+    lists = metric_int(metrics, "lists")
+    key_count = metric_int(metrics, "key_count")
+    storage_bytes = metric_int(metrics, "storage_bytes")
 
     # Latency quantiles (matching Cloudflare dashboard: P50, P75, P90, P99)
-    latency_p50 = metrics.get("latency_p50", {}).get("value", 0)
-    latency_p75 = metrics.get("latency_p75", {}).get("value", 0)
-    latency_p90 = metrics.get("latency_p90", {}).get("value", 0)
-    latency_p99 = metrics.get("latency_p99", {}).get("value", 0)
+    latency_p50 = metric_float(metrics, "latency_p50")
+    latency_p75 = metric_float(metrics, "latency_p75")
+    latency_p90 = metric_float(metrics, "latency_p90")
+    latency_p99 = metric_float(metrics, "latency_p99")
 
     # Read status (hot/cold/not_found)
-    hot_reads = metrics.get("hot_reads", {}).get("value", 0)
-    cold_reads = metrics.get("cold_reads", {}).get("value", 0)
-    not_found = metrics.get("not_found", {}).get("value", 0)
+    hot_reads = metric_int(metrics, "hot_reads")
+    cold_reads = metric_int(metrics, "cold_reads")
+    not_found = metric_int(metrics, "not_found")
 
     # Monthly summary
-    reads_month = metrics.get("reads_month", {}).get("value", 0)
-    writes_month = metrics.get("writes_month", {}).get("value", 0)
-    lists_month = metrics.get("lists_month", {}).get("value", 0)
-    deletes_month = metrics.get("deletes_month", {}).get("value", 0)
+    reads_month = metric_int(metrics, "reads_month")
+    writes_month = metric_int(metrics, "writes_month")
+    lists_month = metric_int(metrics, "lists_month")
+    deletes_month = metric_int(metrics, "deletes_month")
 
     # Build summary - item is already the human-readable name
     summary_parts = [
@@ -217,10 +220,10 @@ def check_cloudflare_kv_global(
         yield Result(state=State.UNKNOWN, summary="KV usage data not found")
         return
 
-    is_paid = metrics.get("daily_reads", {}).get("metadata", {}).get("is_paid_plan", False)
+    is_paid = bool(metric_metadata(metrics, "daily_reads").get("is_paid_plan", False))
     plan_label = "Paid (usage-based)" if is_paid else "Free"
     free_tier_monitoring = params.get("free_tier_monitoring", True)
-    total_ns = int(metrics.get("total_namespaces", {}).get("value", 0))
+    total_ns = metric_int(metrics, "total_namespaces")
 
     # --- Namespaces (simple display) ---
     yield Result(state=State.OK, summary=f"Namespaces: {total_ns} ({plan_label})")
@@ -228,8 +231,8 @@ def check_cloudflare_kv_global(
 
     # --- Reads ---
     yield from check_usage_limit(
-        usage=int(metrics.get("daily_reads", {}).get("value", 0)),
-        limit=int(metrics.get("reads_limit", {}).get("value", 0)),
+        usage=metric_int(metrics, "daily_reads"),
+        limit=metric_int(metrics, "reads_limit"),
         label="Reads",
         metric_usage="cloudflare_kv_daily_reads",
         metric_limit="cloudflare_kv_reads_limit",
@@ -241,8 +244,8 @@ def check_cloudflare_kv_global(
 
     # --- Writes ---
     yield from check_usage_limit(
-        usage=int(metrics.get("daily_writes", {}).get("value", 0)),
-        limit=int(metrics.get("writes_limit", {}).get("value", 0)),
+        usage=metric_int(metrics, "daily_writes"),
+        limit=metric_int(metrics, "writes_limit"),
         label="Writes",
         metric_usage="cloudflare_kv_daily_writes",
         metric_limit="cloudflare_kv_writes_limit",
@@ -254,8 +257,8 @@ def check_cloudflare_kv_global(
 
     # --- Deletes ---
     yield from check_usage_limit(
-        usage=int(metrics.get("daily_deletes", {}).get("value", 0)),
-        limit=int(metrics.get("deletes_limit", {}).get("value", 0)),
+        usage=metric_int(metrics, "daily_deletes"),
+        limit=metric_int(metrics, "deletes_limit"),
         label="Deletes",
         metric_usage="cloudflare_kv_daily_deletes",
         metric_limit="cloudflare_kv_deletes_limit",
@@ -267,8 +270,8 @@ def check_cloudflare_kv_global(
 
     # --- Lists ---
     yield from check_usage_limit(
-        usage=int(metrics.get("daily_lists", {}).get("value", 0)),
-        limit=int(metrics.get("lists_limit", {}).get("value", 0)),
+        usage=metric_int(metrics, "daily_lists"),
+        limit=metric_int(metrics, "lists_limit"),
         label="Lists",
         metric_usage="cloudflare_kv_daily_lists",
         metric_limit="cloudflare_kv_lists_limit",

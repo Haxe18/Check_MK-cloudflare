@@ -10,7 +10,9 @@ import requests
 from .cache import APICounter
 from .constants import (
     CLOUDFLARE_API_BASE_URL,
+    CLOUDFLARE_ERROR_CODE_UNAUTHORIZED,
     CLOUDFLARE_GRAPHQL_URL,
+    CLOUDFLARE_PERMISSION_ERROR_CODES,
     D1_FREE_DAILY_ROWS_READ,
     D1_FREE_DAILY_ROWS_WRITTEN,
     D1_FREE_MAX_DATABASES,
@@ -243,6 +245,133 @@ class CloudflareClient(LoggerMixin):
                 return f" (needs '{permission}')"
         return ""
 
+    @staticmethod
+    def _extract_api_error_details(errors: Any) -> list[tuple[int | None, str]]:
+        """Extract (code, message) pairs from a Cloudflare 'errors' list.
+
+        Args:
+            errors: Value of the 'errors' field of an API response
+
+        Returns:
+            One (code, message) pair per error entry, empty if there are none
+        """
+        if not isinstance(errors, list):
+            return []
+
+        details: list[tuple[int | None, str]] = []
+        for error in errors:
+            if not isinstance(error, dict):
+                details.append((None, str(error)))
+                continue
+            code = error.get("code")
+            message = error.get("message")
+            details.append(
+                (
+                    code if isinstance(code, int) else None,
+                    message if isinstance(message, str) and message else str(error),
+                )
+            )
+        return details
+
+    @staticmethod
+    def _is_permission_error(error_code: int | None, error_message: str) -> bool:
+        """Return True if an API error means the token lacks a permission.
+
+        Cloudflare answers a missing token permission with code 10000
+        ("Authentication error") or 9109 ("Unauthorized to access requested resource"),
+        so the code counts as well as the message text.
+
+        Args:
+            error_code: Cloudflare error code, if any
+            error_message: Cloudflare error message
+
+        Returns:
+            True for permission-related failures
+        """
+        if error_code in CLOUDFLARE_PERMISSION_ERROR_CODES:
+            return True
+        lowered = error_message.lower()
+        return any(
+            marker in lowered
+            for marker in ("permission", "not authorized", "unauthorized", "forbidden")
+        )
+
+    @staticmethod
+    def _is_invalid_token_error(error_code: int | None, error_message: str) -> bool:
+        """Return True if an API error means the token itself is invalid.
+
+        Cloudflare answers zone endpoints with code 9109 "Invalid access token" for an
+        invalid token, but uses the same code for a missing permission, so the message
+        tells the two apart.
+
+        Args:
+            error_code: Cloudflare error code, if any
+            error_message: Cloudflare error message
+
+        Returns:
+            True for an invalid or expired token
+        """
+        lowered = error_message.lower()
+        return (
+            error_code == CLOUDFLARE_ERROR_CODE_UNAUTHORIZED
+            and "invalid" in lowered
+            and "token" in lowered
+        )
+
+    def _add_auth_error(
+        self,
+        endpoint: str,
+        error_details: list[tuple[int | None, str]],
+        status_code: int | None = None,
+    ) -> bool:
+        """Record an invalid-token or permission error, if the response is one.
+
+        Any HTTP 403 counts as a missing permission unless the token itself is invalid.
+
+        Args:
+            endpoint: API endpoint that failed
+            error_details: (code, message) pairs from the response
+            status_code: HTTP status of the response, if it failed
+
+        Returns:
+            True if an error was recorded
+        """
+        if any(self._is_invalid_token_error(code, message) for code, message in error_details):
+            self.error_collector.add(
+                ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"Invalid API token: {endpoint}"
+            )
+            return True
+        if status_code == 403 or any(
+            self._is_permission_error(code, message) for code, message in error_details
+        ):
+            hint = self._get_permission_hint(endpoint)
+            self.error_collector.add(
+                ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"Permission denied: {endpoint}{hint}"
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _format_api_error_message(
+        prefix: str,
+        endpoint: str,
+        status_code: int | None = None,
+        error_code: int | None = None,
+        error_message: str = "",
+    ) -> str:
+        """Build standardized API error messages with optional details."""
+        details = []
+        if status_code is not None:
+            details.append(f"HTTP {status_code}")
+        if error_code is not None:
+            details.append(f"code {error_code}")
+        if error_message:
+            details.append(f"msg {error_message}")
+
+        if not details:
+            return f"{prefix}: {endpoint}"
+        return f"{prefix}: {endpoint} ({', '.join(details)})"
+
     def _rest_get(
         self,
         endpoint: str,
@@ -268,48 +397,53 @@ class CloudflareClient(LoggerMixin):
 
             errors = data.get("errors", [])
             self.log_error(f"API error for {endpoint}: {errors}")
-            # Add to errors list so it shows in Check_MK
-            # Check if any error indicates permission issue
-            is_permission_error = any(
-                "permission" in str(e).lower()
-                or "forbidden" in str(e).lower()
-                or e.get("code") == 10000
-                for e in errors
-                if isinstance(e, dict)
-            )
-            if is_permission_error:
-                hint = self._get_permission_hint(endpoint)
+            error_details = self._extract_api_error_details(errors)
+            if self._add_auth_error(endpoint, error_details):
+                return []
+            if not error_details:
                 self.error_collector.add(
-                    ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"Permission denied: {endpoint}{hint}"
+                    ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"REST API: {endpoint}"
                 )
             else:
-                for error in errors:
-                    error_msg = (
-                        error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                    )
+                for code, message in error_details:
                     self.error_collector.add(
-                        ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"REST API: {error_msg}"
+                        ERROR_CATEGORY_API,
+                        ERROR_SERVICE_REST,
+                        self._format_api_error_message(
+                            "REST API",
+                            endpoint,
+                            error_code=code,
+                            error_message=message,
+                        ),
                     )
             return []
 
         except requests.exceptions.RequestException as exc:
             self.log_error(f"Request failed for {endpoint}: {exc}")
-            # Extract HTTP status code if available
-            status_code = ""
+            status_code: int | None = None
+            error_details = []
             if hasattr(exc, "response") and exc.response is not None:
-                status_code = f" ({exc.response.status_code})"
+                status_code = exc.response.status_code
+                try:
+                    payload = exc.response.json()
+                except ValueError:
+                    payload = None
+                if isinstance(payload, dict):
+                    error_details = self._extract_api_error_details(payload.get("errors"))
+            error_code, error_message = error_details[0] if error_details else (None, "")
 
-            # Add to errors list with permission hint for 403 errors
-            if "403" in str(exc):
-                hint = self._get_permission_hint(endpoint)
-                self.error_collector.add(
-                    ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"Permission denied: {endpoint}{hint}"
-                )
-            else:
+            if not self._add_auth_error(endpoint, error_details, status_code):
+                prefix = "Rate limited" if status_code == 429 else "REST API error"
                 self.error_collector.add(
                     ERROR_CATEGORY_API,
                     ERROR_SERVICE_REST,
-                    f"REST API error{status_code}: {endpoint}",
+                    self._format_api_error_message(
+                        prefix,
+                        endpoint,
+                        status_code=status_code,
+                        error_code=error_code,
+                        error_message=error_message,
+                    ),
                 )
             return []
         except ValueError as exc:

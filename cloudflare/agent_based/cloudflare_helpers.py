@@ -4,11 +4,10 @@
 from collections.abc import Callable, Generator
 from typing import Any
 
-from cmk.agent_based.v2 import CheckResult, Metric, Result, State, check_levels
+from cmk.agent_based.v2 import CheckResult, Metric, Result, State
 
 from ..lib import constants as lib_constants
 
-DEFAULT_TIMEFRAME = lib_constants.DEFAULT_TIMEFRAME
 FREE_PLAN_DAILY_LIMIT = lib_constants.FREE_PLAN_DAILY_LIMIT
 SERVICE_ACCESS = lib_constants.SERVICE_ACCESS
 SERVICE_D1 = lib_constants.SERVICE_D1
@@ -150,22 +149,6 @@ def get_resource_metadata(
     return {}
 
 
-def get_timeframe(section: dict[str, Any], service: str) -> str:
-    """Get the analytics timeframe for a service.
-
-    Args:
-        section: Parsed cloudflare section
-        service: Service name
-
-    Returns:
-        Timeframe string (e.g., '24h')
-    """
-    service_data = get_service_data(section, service)
-    if service_data:
-        return service_data.get("timeframe", DEFAULT_TIMEFRAME)
-    return DEFAULT_TIMEFRAME
-
-
 def format_bytes(byte_count: float) -> str:
     """Format bytes to human-readable string.
 
@@ -196,114 +179,159 @@ def format_count(count: float) -> str:
     return f"{int(count):,}"
 
 
-def check_metric_levels(
-    value: float,
-    metric_name: str,
-    params: dict[str, Any],
-    param_key: str,
-    label: str,
-    render_func: Callable[[float], str] = str,
-    boundaries: tuple[float | None, float | None] | None = None,
-) -> CheckResult:
-    """Check metric value against configured thresholds.
+def parse_fixed_levels(
+    levels: Any,
+    default_warn: float,
+    default_crit: float,
+) -> tuple[float, float] | None:
+    """Parse SimpleLevels params (Checkmk v2 format) into fixed warn/crit values.
 
     Args:
-        value: Metric value to check
-        metric_name: Name for the metric output
-        params: Check parameters with threshold configuration
-        param_key: Key for threshold in params (e.g., 'error_rate_levels')
-        label: Human-readable label for the metric
-        render_func: Function to render the value
-        boundaries: Optional (min, max) boundaries for the metric
+        levels: Raw levels value from params: ("fixed", (warn, crit)),
+            ("no_levels", None), or None if the rule does not set it
+        default_warn: Fallback warning threshold
+        default_crit: Fallback critical threshold
 
-    Yields:
-        Check results and metrics
+    Returns:
+        Tuple of (warn, crit) as floats, or None if levels are switched off
     """
-    levels = params.get(param_key)
+    if not _is_valid_check_levels_param(levels):
+        return default_warn, default_crit
 
-    # Handle SimpleLevels format
-    levels_upper = None
-    if levels is not None:
-        if isinstance(levels, tuple) and len(levels) == 2:
-            # Direct (warn, crit) tuple
-            levels_upper = levels
-        elif isinstance(levels, dict):
-            # SimpleLevelsConfigModel format
-            if levels.get("type") == "fixed":
-                levels_upper = levels.get("value")
+    level_type, level_values = levels
+    if level_type == "no_levels":
+        return None
+    if level_type == "fixed":
+        return float(level_values[0]), float(level_values[1])
 
-    yield from check_levels(
-        value,
-        levels_upper=levels_upper,
-        metric_name=metric_name,
-        label=label,
-        render_func=render_func,
-        boundaries=boundaries,
-    )
+    return default_warn, default_crit
 
 
-def extract_levels(params: dict[str, Any], param_key: str) -> tuple[float, float] | None:
-    """Extract threshold levels from params.
+def usage_state(pct: float, levels: tuple[float, float] | None) -> State:
+    """Map a usage percentage to a check state.
+
+    Args:
+        pct: Usage in percent of the limit
+        levels: (warn, crit) percentages, or None if levels are switched off
+
+    Returns:
+        State.CRIT/WARN when the matching level is reached, otherwise State.OK
+    """
+    if levels is None:
+        return State.OK
+    warn_pct, crit_pct = levels
+    if pct >= crit_pct:
+        return State.CRIT
+    if pct >= warn_pct:
+        return State.WARN
+    return State.OK
+
+
+def _is_valid_check_levels_param(levels: Any) -> bool:
+    """Validate Checkmk v2 check_levels parameter format.
+
+    Supported formats:
+    - ("fixed", (warn, crit))
+    - ("no_levels", None)
+    - ("predictive", <payload>)  # payload validated by Checkmk
+    """
+    if not isinstance(levels, tuple) or len(levels) != 2:
+        return False
+
+    mode, payload = levels
+    if not isinstance(mode, str):
+        return False
+
+    if mode == "fixed":
+        return (
+            isinstance(payload, tuple)
+            and len(payload) == 2
+            and all(isinstance(v, (int, float)) for v in payload)
+        )
+
+    if mode == "no_levels":
+        return payload is None
+
+    if mode == "predictive":
+        return True
+
+    return False
+
+
+def extract_levels(params: dict[str, Any], param_key: str) -> tuple[str, Any] | None:
+    """Extract threshold levels from params in Checkmk v2 format.
 
     Args:
         params: Check parameters with threshold configuration
         param_key: Key for threshold in params
 
     Returns:
-        Tuple of (warn, crit) or None if not configured
+        Checkmk v2 levels tuple or None if not configured/invalid
     """
     levels = params.get(param_key)
     if levels is None:
         return None
-    if isinstance(levels, tuple) and len(levels) == 2:
-        return levels
-    if isinstance(levels, dict) and levels.get("type") == "fixed":
-        return levels.get("value")
-    return None
+    return levels if _is_valid_check_levels_param(levels) else None
 
 
-def check_metric_levels_lower(
-    value: float,
-    metric_name: str,
-    params: dict[str, Any],
-    param_key: str,
-    label: str,
-    render_func: Callable[[float], str] = str,
-    boundaries: tuple[float | None, float | None] | None = None,
-) -> CheckResult:
-    """Check metric value against lower thresholds.
+def get_metric_data(metrics: dict[str, Any], metric_name: str) -> dict[str, Any]:
+    """Return a metric payload as dict, or an empty dict if invalid/missing.
 
     Args:
-        value: Metric value to check
-        metric_name: Name for the metric output
-        params: Check parameters with threshold configuration
-        param_key: Key for threshold in params
-        label: Human-readable label for the metric
-        render_func: Function to render the value
-        boundaries: Optional (min, max) boundaries for the metric
+        metrics: Metric mapping for one resource
+        metric_name: Metric key to retrieve
 
-    Yields:
-        Check results and metrics
+    Returns:
+        Metric payload dictionary
     """
-    levels = params.get(param_key)
+    metric = metrics.get(metric_name, {})
+    return metric if isinstance(metric, dict) else {}
 
-    # Handle SimpleLevels format
-    levels_lower = None
-    if levels is not None:
-        if isinstance(levels, tuple) and len(levels) == 2:
-            levels_lower = levels
-        elif isinstance(levels, dict):
-            if levels.get("type") == "fixed":
-                levels_lower = levels.get("value")
 
-    yield from check_levels(
-        value,
-        levels_lower=levels_lower,
-        metric_name=metric_name,
-        label=label,
-        render_func=render_func,
-        boundaries=boundaries,
-    )
+def metric_float(metrics: dict[str, Any], metric_name: str, default: float = 0.0) -> float:
+    """Read a metric value as float with a safe fallback.
+
+    Args:
+        metrics: Metric mapping for one resource
+        metric_name: Metric key to retrieve
+        default: Fallback value if conversion fails
+
+    Returns:
+        Metric value as float
+    """
+    value = get_metric_data(metrics, metric_name).get("value", default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def metric_int(metrics: dict[str, Any], metric_name: str, default: int = 0) -> int:
+    """Read a metric value as int with a safe fallback.
+
+    Args:
+        metrics: Metric mapping for one resource
+        metric_name: Metric key to retrieve
+        default: Fallback value if conversion fails
+
+    Returns:
+        Metric value as int
+    """
+    return int(metric_float(metrics, metric_name, float(default)))
+
+
+def metric_metadata(metrics: dict[str, Any], metric_name: str) -> dict[str, Any]:
+    """Read metric metadata as dict with safe fallback.
+
+    Args:
+        metrics: Metric mapping for one resource
+        metric_name: Metric key to retrieve metadata from
+
+    Returns:
+        Metadata dictionary
+    """
+    metadata = get_metric_data(metrics, metric_name).get("metadata", {})
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def check_usage_limit(
@@ -345,22 +373,12 @@ def check_usage_limit(
     # Calculate percentage
     pct = (usage / limit * 100) if limit > 0 else 0.0
 
-    # Extract threshold levels
-    warn_pct, crit_pct = default_warn, default_crit
-    levels = params.get(param_key)
-    if levels:
-        if isinstance(levels, tuple):
-            warn_pct, crit_pct = levels
-        elif isinstance(levels, dict) and levels.get("type") == "fixed":
-            warn_pct, crit_pct = levels.get("value", (default_warn, default_crit))
+    # Extract threshold levels (None = levels switched off in the rule)
+    levels = parse_fixed_levels(params.get(param_key), default_warn, default_crit)
+    if not free_tier_monitoring or limit <= 0:
+        levels = None
 
-    # Determine state
-    state = State.OK
-    if free_tier_monitoring and limit > 0:
-        if pct >= crit_pct:
-            state = State.CRIT
-        elif pct >= warn_pct:
-            state = State.WARN
+    state = usage_state(pct, levels)
 
     # Summary text
     if limit > 0:
@@ -393,5 +411,5 @@ def check_usage_limit(
     yield Metric(
         metric_percent,
         pct,
-        levels=(warn_pct, crit_pct) if free_tier_monitoring and limit > 0 else None,
+        levels=levels,
     )

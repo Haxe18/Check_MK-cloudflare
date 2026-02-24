@@ -22,6 +22,11 @@ from .cloudflare_helpers import (
     extract_levels,
     format_count,
     get_resource_id_by_name,
+    metric_float,
+    metric_int,
+    metric_metadata,
+    parse_fixed_levels,
+    usage_state,
 )
 
 # Special resource ID for account-wide usage
@@ -91,27 +96,9 @@ def check_cloudflare_workers(
         return
 
     # Extract metric values
-    requests = metrics.get("requests", {}).get("value", 0)
-    errors = metrics.get("errors", {}).get("value", 0)
-    daily_requests = metrics.get("daily_requests", {}).get("value", 0)
-
-    # CPU Time quantiles
-    cpu_p50 = metrics.get("cpu_time_p50", {}).get("value", 0)
-    cpu_p90 = metrics.get("cpu_time_p90", {}).get("value", 0)
-    cpu_p99 = metrics.get("cpu_time_p99", {}).get("value", 0)
-    cpu_p999 = metrics.get("cpu_time_p999", {}).get("value", 0)
-
-    # Wall Time quantiles
-    wall_p50 = metrics.get("wall_time_p50", {}).get("value", 0)
-    wall_p90 = metrics.get("wall_time_p90", {}).get("value", 0)
-    wall_p99 = metrics.get("wall_time_p99", {}).get("value", 0)
-    wall_p999 = metrics.get("wall_time_p999", {}).get("value", 0)
-
-    # Duration quantiles
-    duration_p50 = metrics.get("duration_p50", {}).get("value", 0)
-    duration_p90 = metrics.get("duration_p90", {}).get("value", 0)
-    duration_p99 = metrics.get("duration_p99", {}).get("value", 0)
-    duration_p999 = metrics.get("duration_p999", {}).get("value", 0)
+    requests = metric_float(metrics, "requests")
+    errors = metric_float(metrics, "errors")
+    daily_requests = metric_float(metrics, "daily_requests")
 
     # Calculate error rate
     error_rate = (errors / requests * 100) if requests > 0 else 0
@@ -160,24 +147,42 @@ def check_cloudflare_workers(
     # Timing metrics configuration
     # (Label, Value, Ruleset Key, Metric Name)
     timings_config = [
-        # CPU Time
-        ("CPU P50", cpu_p50, "cpu_time_p50_levels", "cloudflare_worker_cpu_p50"),
-        ("CPU P90", cpu_p90, "cpu_time_p90_levels", "cloudflare_worker_cpu_p90"),
-        ("CPU P99", cpu_p99, "cpu_time_p99_levels", "cloudflare_worker_cpu_p99"),
-        ("CPU P999", cpu_p999, "cpu_time_p999_levels", "cloudflare_worker_cpu_p999"),
-        # Wall Time
-        ("Wall P50", wall_p50, "wall_time_p50_levels", "cloudflare_worker_wall_p50"),
-        ("Wall P90", wall_p90, "wall_time_p90_levels", "cloudflare_worker_wall_p90"),
-        ("Wall P99", wall_p99, "wall_time_p99_levels", "cloudflare_worker_wall_p99"),
-        ("Wall P999", wall_p999, "wall_time_p999_levels", "cloudflare_worker_wall_p999"),
-        # Request Duration
-        ("Duration P50", duration_p50, "duration_p50_levels", "cloudflare_worker_duration_p50"),
-        ("Duration P90", duration_p90, "duration_p90_levels", "cloudflare_worker_duration_p90"),
-        ("Duration P99", duration_p99, "duration_p99_levels", "cloudflare_worker_duration_p99"),
-        ("Duration P999", duration_p999, "duration_p999_levels", "cloudflare_worker_duration_p999"),
+        ("CPU P50", "cpu_time_p50", "cpu_time_p50_levels", "cloudflare_worker_cpu_p50"),
+        ("CPU P90", "cpu_time_p90", "cpu_time_p90_levels", "cloudflare_worker_cpu_p90"),
+        ("CPU P99", "cpu_time_p99", "cpu_time_p99_levels", "cloudflare_worker_cpu_p99"),
+        ("CPU P999", "cpu_time_p999", "cpu_time_p999_levels", "cloudflare_worker_cpu_p999"),
+        ("Wall P50", "wall_time_p50", "wall_time_p50_levels", "cloudflare_worker_wall_p50"),
+        ("Wall P90", "wall_time_p90", "wall_time_p90_levels", "cloudflare_worker_wall_p90"),
+        ("Wall P99", "wall_time_p99", "wall_time_p99_levels", "cloudflare_worker_wall_p99"),
+        ("Wall P999", "wall_time_p999", "wall_time_p999_levels", "cloudflare_worker_wall_p999"),
+        (
+            "Duration P50",
+            "duration_p50",
+            "duration_p50_levels",
+            "cloudflare_worker_duration_p50",
+        ),
+        (
+            "Duration P90",
+            "duration_p90",
+            "duration_p90_levels",
+            "cloudflare_worker_duration_p90",
+        ),
+        (
+            "Duration P99",
+            "duration_p99",
+            "duration_p99_levels",
+            "cloudflare_worker_duration_p99",
+        ),
+        (
+            "Duration P999",
+            "duration_p999",
+            "duration_p999_levels",
+            "cloudflare_worker_duration_p999",
+        ),
     ]
 
-    for label, value, key, metric_name in timings_config:
+    for label, source_metric, key, metric_name in timings_config:
+        value = metric_float(metrics, source_metric)
         levels = extract_levels(params, key)
         # Always show text for P50s (to match previous behavior), or if thresholds are configured
         if levels or "P50" in label:
@@ -213,33 +218,20 @@ def check_cloudflare_workers_global(
         return
 
     # Extract metric values
-    daily_requests = int(metrics.get("daily_requests", {}).get("value", 0))
-    daily_limit = int(metrics.get("daily_limit", {}).get("value", FREE_PLAN_DAILY_LIMIT))
-    usage_percent = metrics.get("daily_usage_percent", {}).get("value", 0)
-    is_paid = metrics.get("daily_requests", {}).get("metadata", {}).get("is_paid_plan", False)
+    daily_requests = metric_int(metrics, "daily_requests")
+    daily_limit = metric_int(metrics, "daily_limit", FREE_PLAN_DAILY_LIMIT)
+    usage_percent = metric_float(metrics, "daily_usage_percent")
+    is_paid = bool(metric_metadata(metrics, "daily_requests").get("is_paid_plan", False))
 
     # Extract monthly metrics
-    monthly_requests = int(metrics.get("monthly_requests", {}).get("value", 0))
+    monthly_requests = metric_int(metrics, "monthly_requests")
     free_tier_monitoring = params.get("free_tier_monitoring", True)
 
-    # Determine state based on usage percentage
-    state = State.OK
-    warn_pct, crit_pct = 80.0, 95.0  # defaults
-
-    # Parse daily_usage_levels (SimpleLevels format)
-    daily_usage_levels = params.get("daily_usage_levels")
-    if daily_usage_levels:
-        if isinstance(daily_usage_levels, tuple):
-            warn_pct, crit_pct = daily_usage_levels
-        elif isinstance(daily_usage_levels, dict) and daily_usage_levels.get("type") == "fixed":
-            warn_pct, crit_pct = daily_usage_levels.get("value", (80.0, 95.0))
-
-    # Only check thresholds for free plan
-    if free_tier_monitoring and not is_paid and daily_limit > 0:
-        if usage_percent >= crit_pct:
-            state = State.CRIT
-        elif usage_percent >= warn_pct:
-            state = State.WARN
+    # Only check thresholds for free plan (None = levels switched off in the rule)
+    levels = parse_fixed_levels(params.get("daily_usage_levels"), 80.0, 95.0)
+    if not free_tier_monitoring or is_paid or daily_limit <= 0:
+        levels = None
+    state = usage_state(usage_percent, levels)
 
     # Build summary with monthly data
     if is_paid or daily_limit == 0:
@@ -278,7 +270,7 @@ def check_cloudflare_workers_global(
     yield Metric(
         "cloudflare_workers_usage_percent",
         usage_percent,
-        levels=(warn_pct, crit_pct) if free_tier_monitoring and not is_paid else None,
+        levels=levels,
     )
 
     # Monthly metrics
@@ -287,18 +279,17 @@ def check_cloudflare_workers_global(
     # Per-worker breakdown for stacked graph (Top 5 + Other)
     worker_breakdown = []
     for i in range(1, 6):
-        slot_metric = metrics.get(f"top{i}_requests", {})
-        slot_value = int(slot_metric.get("value", 0))
-        slot_name = slot_metric.get("metadata", {}).get("worker_name", "")
+        slot_metric_name = f"top{i}_requests"
+        slot_value = metric_int(metrics, slot_metric_name)
+        slot_name = metric_metadata(metrics, slot_metric_name).get("worker_name", "")
 
         yield Metric(f"cloudflare_workers_top{i}_requests", slot_value)
 
         if slot_name and slot_value > 0:
             worker_breakdown.append(f"#{i}: {slot_name} ({format_count(slot_value)})")
 
-    other_metric = metrics.get("other_requests", {})
-    other_value = int(other_metric.get("value", 0))
-    other_count = other_metric.get("metadata", {}).get("count", 0)
+    other_value = metric_int(metrics, "other_requests")
+    other_count = metric_metadata(metrics, "other_requests").get("count", 0)
 
     yield Metric("cloudflare_workers_other_requests", other_value)
 

@@ -37,6 +37,13 @@ metric_cloudflare_api_elapsed_time = Metric(
     color=Color.GREEN,
 )
 
+metric_cloudflare_api_errors = Metric(
+    name="cloudflare_api_errors",
+    title=Title("API Errors"),
+    unit=UNIT_COUNT,
+    color=Color.RED,
+)
+
 # =============================================================================
 # Workers Metrics
 # =============================================================================
@@ -698,6 +705,12 @@ graph_cloudflare_api = Graph(
     name="cloudflare_api",
     title=Title("Cloudflare API Usage"),
     compound_lines=["cloudflare_api_requests"],
+)
+
+graph_cloudflare_api_errors = Graph(
+    name="cloudflare_api_errors",
+    title=Title("Cloudflare API Errors"),
+    compound_lines=["cloudflare_api_errors"],
 )
 
 # Workers (per-worker)

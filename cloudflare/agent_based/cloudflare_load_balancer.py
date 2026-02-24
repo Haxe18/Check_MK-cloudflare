@@ -125,5 +125,5 @@ check_plugin_cloudflare_load_balancer = CheckPlugin(
     discovery_function=discover_cloudflare_load_balancer,
     check_function=check_cloudflare_load_balancer,
     check_ruleset_name="cloudflare_load_balancer",
-    check_default_parameters={"healthy_origin_ratio_levels": (50.0, 25.0)},
+    check_default_parameters={"healthy_origin_ratio_levels": ("fixed", (50.0, 25.0))},
 )

@@ -6,7 +6,8 @@ distribution: check_mk
 description:
  This check monitors the Cloudflare API usage of the special agent.
  It reports the number of API calls made, elapsed time, and any errors
- that occurred during data collection. Errors can be filtered using
+ that occurred during data collection. A dedicated "Cloudflare API Errors"
+ graph visualizes active (non-ignored) error count over time. Errors can be filtered using
  configurable ignore patterns.
 
 discovery:

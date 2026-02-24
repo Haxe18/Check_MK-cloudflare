@@ -114,7 +114,7 @@ After discovery, you'll see services like:
 - `Cloudflare D1 Global` - D1 free tier usage monitoring (databases, storage, rows)
 - `Cloudflare KV Global` - KV free tier usage monitoring (reads, writes, deletes, lists)
 - `Cloudflare R2 Global` - R2 storage usage vs included free tier
-- `Cloudflare API Usage` - API call counter and errors
+- `Cloudflare API Usage` - API call counter and errors (incl. `Cloudflare API Errors` graph for active/non-ignored errors)
 
 ## Architecture
 
@@ -199,6 +199,7 @@ The existing release workflow (`release.yml`) already triggers on `v*` tags, so 
 
 ### API Errors Showing
 - Check `Cloudflare API Usage` service for error details
+- Use the dedicated `Cloudflare API Errors` graph to track active (non-ignored) error count over time
 - Common issues: Missing permissions, invalid token, rate limiting
 - Configure `ignore_error_patterns` in ruleset to suppress known errors
 

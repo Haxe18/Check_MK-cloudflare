@@ -22,6 +22,8 @@ from .cloudflare_helpers import (
     format_bytes,
     format_count,
     get_resource_id_by_name,
+    metric_float,
+    metric_int,
 )
 
 
@@ -68,23 +70,23 @@ def check_cloudflare_zone_analytics(
         return
 
     # Extract metric values
-    requests = metrics.get("requests", {}).get("value", 0)
-    bandwidth = metrics.get("bandwidth", {}).get("value", 0)
-    threats = metrics.get("threats", {}).get("value", 0)
-    page_views = metrics.get("page_views", {}).get("value", 0)
-    cached_requests = metrics.get("cached_requests", {}).get("value", 0)
-    cache_hit_ratio = metrics.get("cache_hit_ratio", {}).get("value", 0)
+    requests = metric_int(metrics, "requests")
+    bandwidth = metric_int(metrics, "bandwidth")
+    threats = metric_int(metrics, "threats")
+    page_views = metric_int(metrics, "page_views")
+    cached_requests = metric_int(metrics, "cached_requests")
+    cache_hit_ratio = metric_float(metrics, "cache_hit_ratio")
 
     # Performance metrics (Pro+ plans)
-    ttfb_p50 = metrics.get("ttfb_p50", {}).get("value", 0)
-    ttfb_p95 = metrics.get("ttfb_p95", {}).get("value", 0)
-    ttfb_p99 = metrics.get("ttfb_p99", {}).get("value", 0)
-    origin_response_p50 = metrics.get("origin_response_p50", {}).get("value", 0)
-    origin_response_p95 = metrics.get("origin_response_p95", {}).get("value", 0)
-    origin_response_p99 = metrics.get("origin_response_p99", {}).get("value", 0)
-    edge_dns_p50 = metrics.get("edge_dns_p50", {}).get("value", 0)
-    edge_dns_p95 = metrics.get("edge_dns_p95", {}).get("value", 0)
-    edge_dns_p99 = metrics.get("edge_dns_p99", {}).get("value", 0)
+    ttfb_p50 = metric_float(metrics, "ttfb_p50")
+    ttfb_p95 = metric_float(metrics, "ttfb_p95")
+    ttfb_p99 = metric_float(metrics, "ttfb_p99")
+    origin_response_p50 = metric_float(metrics, "origin_response_p50")
+    origin_response_p95 = metric_float(metrics, "origin_response_p95")
+    origin_response_p99 = metric_float(metrics, "origin_response_p99")
+    edge_dns_p50 = metric_float(metrics, "edge_dns_p50")
+    edge_dns_p95 = metric_float(metrics, "edge_dns_p95")
+    edge_dns_p99 = metric_float(metrics, "edge_dns_p99")
 
     # Build summary - item is already the domain name in service name
     summary_parts = [

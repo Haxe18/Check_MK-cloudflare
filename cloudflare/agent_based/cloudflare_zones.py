@@ -41,7 +41,7 @@ def discover_cloudflare_zones(section: dict[str, Any]) -> DiscoveryResult:
 
 def check_cloudflare_zones(
     item: str,
-    params: dict[str, Any],  # pylint: disable=unused-argument
+    params: dict[str, Any],
     section: dict[str, Any],
 ) -> CheckResult:
     """Check a Cloudflare DNS Zone.
