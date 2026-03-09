@@ -45,12 +45,14 @@ class DataCache(LoggerMixin):
         safe_key = key.replace("/", "_").replace(":", "_")
         return self.cache_dir / f"{self.prefix}_{safe_key}.json"
 
-    def load(self, key: str, config_key: str | None = None) -> Any:
+    def load(self, key: str, config_key: str | None = None, max_age: int | None = None) -> Any:
         """Load data from cache if valid.
 
         Args:
             key: Cache key
             config_key: Optional config key for validation (invalidates cache if changed)
+            max_age: Optional maximum age in seconds instead of the cache TTL
+                (used to read stale data as a fallback)
 
         Returns:
             Cached data or None if expired/missing/config changed
@@ -73,8 +75,11 @@ class DataCache(LoggerMixin):
             cached_at = data.get("_cached_at", 0)
             age = time.time() - cached_at
 
-            if age > self.ttl:
-                self.log_debug(f"Cache expired for key {key} (age: {age:.0f}s, ttl: {self.ttl}s)")
+            allowed_age = self.ttl if max_age is None else max_age
+            if age > allowed_age:
+                self.log_debug(
+                    f"Cache expired for key {key} (age: {age:.0f}s, ttl: {allowed_age}s)"
+                )
                 return None
 
             # Check config key - invalidate if configuration changed

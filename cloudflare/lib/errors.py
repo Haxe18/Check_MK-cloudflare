@@ -16,24 +16,28 @@ class CloudflareError:
         service: Service name ("workers", "kv", "zones", etc.) or "unknown"
         message: Human-readable error message
         timestamp: Unix timestamp when error occurred
+        transient: True if the error is likely to go away on its own
+            (HTTP 5xx, rate limit, timeout, network error, invalid JSON response)
     """
 
     category: str
     service: str
     message: str
     timestamp: float = field(default_factory=time.time)
+    transient: bool = False
 
     def to_dict(self) -> dict[str, str | float]:
         """Convert to dictionary for JSON serialization.
 
         Returns:
-            Dictionary with category, service, message, timestamp
+            Dictionary with category, service, message, timestamp, transient
         """
         return {
             "category": self.category,
             "service": self.service,
             "message": self.message,
             "timestamp": self.timestamp,
+            "transient": self.transient,
         }
 
     @classmethod
@@ -51,6 +55,7 @@ class CloudflareError:
             service=str(data.get("service", "unknown")),
             message=str(data.get("message", "")),
             timestamp=float(data.get("timestamp", time.time())),
+            transient=bool(data.get("transient", False)),
         )
 
 
@@ -78,7 +83,7 @@ class ErrorCollector:
         self._errors: list[CloudflareError] = []
         self._lock = threading.Lock()
 
-    def add(self, category: str, service: str, message: str) -> None:
+    def add(self, category: str, service: str, message: str, transient: bool = False) -> None:
         """Add an error to the collection.
 
         Thread-safe: Uses lock to protect error list.
@@ -87,12 +92,14 @@ class ErrorCollector:
             category: Error category ("api", "discovery", "metrics", "cache")
             service: Service name ("workers", "kv", "zones", etc.)
             message: Human-readable error message
+            transient: True if the error is likely to go away on its own
         """
         error = CloudflareError(
             category=category,
             service=service,
             message=message,
             timestamp=time.time(),
+            transient=transient,
         )
         with self._lock:
             self._errors.append(error)

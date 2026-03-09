@@ -352,6 +352,19 @@ class CloudflareClient(LoggerMixin):
         return False
 
     @staticmethod
+    def _is_transient_status(status_code: int | None) -> bool:
+        """Return True if a failed request is likely to succeed on a later run.
+
+        Args:
+            status_code: HTTP status of the failed request, None for timeouts and
+                network errors (no response)
+
+        Returns:
+            True for no response, HTTP 429 and HTTP 5xx
+        """
+        return status_code is None or status_code == 429 or status_code >= 500
+
+    @staticmethod
     def _format_api_error_message(
         prefix: str,
         endpoint: str,
@@ -444,12 +457,16 @@ class CloudflareClient(LoggerMixin):
                         error_code=error_code,
                         error_message=error_message,
                     ),
+                    transient=self._is_transient_status(status_code),
                 )
             return []
         except ValueError as exc:
             self.log_error(f"JSON decode error for {endpoint}: {exc}")
             self.error_collector.add(
-                ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"REST API JSON error: {endpoint}"
+                ERROR_CATEGORY_API,
+                ERROR_SERVICE_REST,
+                f"REST API JSON error: {endpoint}",
+                transient=True,
             )
             return []
 
@@ -488,14 +505,21 @@ class CloudflareClient(LoggerMixin):
 
         except requests.exceptions.RequestException as exc:
             self.log_error(f"GraphQL request failed: {exc}")
+            status_code = exc.response.status_code if exc.response is not None else None
             self.error_collector.add(
-                ERROR_CATEGORY_API, ERROR_SERVICE_GRAPHQL, f"GraphQL request failed: {exc}"
+                ERROR_CATEGORY_API,
+                ERROR_SERVICE_GRAPHQL,
+                f"GraphQL request failed: {exc}",
+                transient=self._is_transient_status(status_code),
             )
             return {}
         except ValueError as exc:
             self.log_error(f"GraphQL JSON decode error: {exc}")
             self.error_collector.add(
-                ERROR_CATEGORY_API, ERROR_SERVICE_GRAPHQL, f"GraphQL JSON decode error: {exc}"
+                ERROR_CATEGORY_API,
+                ERROR_SERVICE_GRAPHQL,
+                f"GraphQL JSON decode error: {exc}",
+                transient=True,
             )
             return {}
 
@@ -2447,20 +2471,12 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of deployment objects sorted by created_on (newest first)
         """
-        endpoint = f"accounts/{self.account_id}/pages/projects/{project_name}/deployments"
-        url = f"{self.BASE_URL}/{endpoint}?per_page={limit}"
-
-        try:
-            response = self._request_with_retry("GET", url)
-            data = response.json()
-
-            if data.get("success"):
-                return data.get("result", [])
-            return []
-
-        except (requests.exceptions.RequestException, ValueError) as exc:
-            self.log_error(f"Failed to get deployments for {project_name}: {exc}")
-            return []
+        endpoint = (
+            f"accounts/{self.account_id}/pages/projects/{project_name}/deployments"
+            f"?per_page={limit}"
+        )
+        result = self._rest_get(endpoint)
+        return result if isinstance(result, list) else []
 
     def fetch_pages_functions_analytics(
         self,

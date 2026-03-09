@@ -136,27 +136,63 @@ class CloudflareOrchestrator(LoggerMixin):
             # Full run: discovery + analytics
             result = section.run(self.timeframe)
 
-            # Cache discovery results separately (longer TTL)
-            self.discovery_cache.save(
-                f"{service_name}_resources",
-                result.get("resources", []),
-                config_key=config_key,
-            )
-
-        # Collect errors from this section's API calls and include in result
-        # This ensures errors are cached along with the metrics
         section_errors = self.client.get_and_clear_errors()
         if section_errors:
             result["section_errors"] = section_errors
+
+        resources = result.get("resources", [])
+        # Only errors that go away on their own (HTTP 5xx, rate limit, timeout, network,
+        # invalid JSON response) block caching; lasting ones like a missing permission
+        # are cached as usual.
+        should_cache = not any(e.get("transient") for e in section_errors)
+
+        if cached_resources is None:
+            # Do not overwrite discovery state that transient API errors may have left incomplete.
+            if should_cache:
+                self.discovery_cache.save(
+                    f"{service_name}_resources",
+                    resources,
+                    config_key=config_key,
+                )
+            else:
+                self.log_warning(
+                    f"Skipping discovery cache update for {service_name} due to transient API errors"
+                )
 
         # Collect skipped Pro+ features info (e.g., WAF for Free zones)
         skipped_free_zones = getattr(section, "_skipped_free_zones", None)
         if skipped_free_zones:
             result["skipped_free_zones"] = skipped_free_zones
 
-        # Cache full metrics result (shorter TTL)
-        self.metrics_cache.save(cache_key, result, config_key=config_key)
+        if should_cache:
+            result["fetched_at"] = time.time()
+            self.metrics_cache.save(cache_key, result, config_key=config_key)
+            return result
 
+        # Transient API errors may have left the result empty or zeroed. Serve the last
+        # good result instead (up to the discovery TTL old, at least two metrics TTLs) with
+        # the current errors. It is cached again with its old fetch time, so the next try
+        # waits for the normal metrics TTL instead of hitting the API on every run.
+        stale_max_age = max(self.discovery_cache.ttl, 2 * self.metrics_cache.ttl)
+        stale_result = self.metrics_cache.load(
+            cache_key, config_key=config_key, max_age=stale_max_age
+        )
+        if (
+            stale_result
+            and stale_result.get("resources")
+            and time.time() - stale_result.get("fetched_at", 0) <= stale_max_age
+        ):
+            self.log_warning(
+                f"Serving last good data for {service_name} due to transient API errors"
+            )
+            stale_result["section_errors"] = section_errors
+            self.metrics_cache.save(cache_key, stale_result, config_key=config_key)
+            return stale_result
+
+        # No usable last good data: cache the result as it is so the API load stays normal.
+        # fetched_at 0 keeps this possibly zeroed result from ever counting as last good data.
+        result["fetched_at"] = 0
+        self.metrics_cache.save(cache_key, result, config_key=config_key)
         return result
 
     def run(self) -> dict[str, Any]:
