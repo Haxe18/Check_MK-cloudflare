@@ -40,6 +40,7 @@ from .constants import (
     KV_PAID_MONTHLY_WRITES,
     R2_FREE_STORAGE,
     R2_JURISDICTIONS,
+    TIMEFRAME_24H,
     TIMEFRAME_MINUTES,
 )
 from .errors import ErrorCollector
@@ -552,31 +553,6 @@ class CloudflareClient(LoggerMixin):
         """
         result = self._rest_get(f"accounts/{self.account_id}/storage/kv/namespaces")
         return result if isinstance(result, list) else []
-
-    def list_kv_keys(self, namespace_id: str) -> int:
-        """List keys in a KV namespace to get count.
-
-        Args:
-            namespace_id: KV namespace ID
-
-        Returns:
-            Number of keys in namespace
-        """
-        endpoint = f"accounts/{self.account_id}/storage/kv/namespaces/{namespace_id}/keys"
-        url = f"{self.BASE_URL}/{endpoint}"
-
-        try:
-            response = self._request_with_retry("GET", url)
-            data = response.json()
-
-            if data.get("success"):
-                result_info = data.get("result_info", {})
-                return result_info.get("count", len(data.get("result", [])))
-            return 0
-
-        except (requests.exceptions.RequestException, ValueError) as exc:
-            self.log_error(f"Failed to list KV keys for {namespace_id}: {exc}")
-            return 0
 
     def list_zones(self) -> list[dict[str, Any]]:
         """List all DNS zones.
@@ -1248,7 +1224,7 @@ class CloudflareClient(LoggerMixin):
                 "writes": 0,
                 "deletes": 0,
                 "lists": 0,
-                "key_count": self.list_kv_keys(current_ns_id),
+                "key_count": 0,
                 "storage_bytes": 0,
                 # Latency quantiles (matching Cloudflare dashboard: P50, P75, P90, P99)
                 "latency_p50": 0.0,
@@ -1346,7 +1322,9 @@ class CloudflareClient(LoggerMixin):
                 ns_analytics["latency_p90"] = _weighted_avg(latency_values["latency_p90"])
                 ns_analytics["latency_p99"] = _weighted_avg(latency_values["latency_p99"])
 
-            # Fetch storage bytes
+            # Fetch storage snapshot (key count + bytes). These are daily values, so look at
+            # the last 24h and take the newest day; shorter windows can miss today's snapshot.
+            storage_start, storage_end = self._get_date_range(TIMEFRAME_24H)
             storage_query = """
             query GetKVStorage($accountTag: String!, $namespaceId: String!, $dateStart: Date!, $dateEnd: Date!) {
               viewer {
@@ -1358,9 +1336,14 @@ class CloudflareClient(LoggerMixin):
                       date_leq: $dateEnd
                     }
                     limit: 1
+                    orderBy: [date_DESC]
                   ) {
                     max {
+                      keyCount
                       byteCount
+                    }
+                    dimensions {
+                      date
                     }
                   }
                 }
@@ -1368,14 +1351,16 @@ class CloudflareClient(LoggerMixin):
             }
             """
 
-            storage_data = self._graphql_query(storage_query, variables)
+            storage_variables = {**variables, "dateStart": storage_start, "dateEnd": storage_end}
+            storage_data = self._graphql_query(storage_query, storage_variables)
             storage_accounts = (storage_data.get("viewer") or {}).get("accounts", [])
 
             if storage_accounts:
                 storage_groups = storage_accounts[0].get("kvStorageAdaptiveGroups", [])
                 if storage_groups:
-                    byte_count = storage_groups[0].get("max", {}).get("byteCount", 0)
-                    ns_analytics["storage_bytes"] = byte_count
+                    storage_max = storage_groups[0].get("max") or {}
+                    ns_analytics["key_count"] = storage_max.get("keyCount") or 0
+                    ns_analytics["storage_bytes"] = storage_max.get("byteCount") or 0
 
             return ns_analytics
 
