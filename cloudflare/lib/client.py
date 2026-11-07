@@ -461,6 +461,16 @@ class CloudflareClient(LoggerMixin):
                     )
             return []
 
+        # JSONDecodeError is also a RequestException, so it must be caught first
+        except requests.exceptions.JSONDecodeError as exc:
+            self.log_error(f"JSON decode error for {endpoint}: {exc}")
+            self.error_collector.add(
+                ERROR_CATEGORY_API,
+                ERROR_SERVICE_REST,
+                f"REST API JSON error: {endpoint}",
+                transient=True,
+            )
+            return []
         except requests.exceptions.RequestException as exc:
             self.log_error(f"Request failed for {endpoint}: {exc}")
             status_code: int | None = None
@@ -489,15 +499,6 @@ class CloudflareClient(LoggerMixin):
                     ),
                     transient=self._is_transient_status(status_code),
                 )
-            return []
-        except ValueError as exc:
-            self.log_error(f"JSON decode error for {endpoint}: {exc}")
-            self.error_collector.add(
-                ERROR_CATEGORY_API,
-                ERROR_SERVICE_REST,
-                f"REST API JSON error: {endpoint}",
-                transient=True,
-            )
             return []
 
     def _graphql_query(
@@ -533,6 +534,16 @@ class CloudflareClient(LoggerMixin):
 
             return data.get("data") or {}
 
+        # JSONDecodeError is also a RequestException, so it must be caught first
+        except requests.exceptions.JSONDecodeError as exc:
+            self.log_error(f"GraphQL JSON decode error: {exc}")
+            self.error_collector.add(
+                ERROR_CATEGORY_API,
+                ERROR_SERVICE_GRAPHQL,
+                f"GraphQL JSON decode error: {exc}",
+                transient=True,
+            )
+            return {}
         except requests.exceptions.RequestException as exc:
             self.log_error(f"GraphQL request failed: {exc}")
             status_code = exc.response.status_code if exc.response is not None else None
@@ -541,15 +552,6 @@ class CloudflareClient(LoggerMixin):
                 ERROR_SERVICE_GRAPHQL,
                 f"GraphQL request failed: {exc}",
                 transient=self._is_transient_status(status_code),
-            )
-            return {}
-        except ValueError as exc:
-            self.log_error(f"GraphQL JSON decode error: {exc}")
-            self.error_collector.add(
-                ERROR_CATEGORY_API,
-                ERROR_SERVICE_GRAPHQL,
-                f"GraphQL JSON decode error: {exc}",
-                transient=True,
             )
             return {}
 
