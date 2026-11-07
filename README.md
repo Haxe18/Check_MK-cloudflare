@@ -82,7 +82,7 @@ Create an API Token with the following permissions:
 
 ### Via Command Line
 ```bash
-mkp install cloudflare-1.0.0.mkp
+mkp add cloudflare-1.1.0.mkp
 ```
 
 ## Configuration

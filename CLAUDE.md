@@ -261,7 +261,7 @@ Build .mkp package:
   --plugin-name cloudflare \
   --title "Cloudflare Monitoring" \
   --description "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics." \
-  --version 1.0.0
+  --version 1.1.0
 ```
 
 The plugin is uploaded via Check_MK WATO "Extension Packages" page.

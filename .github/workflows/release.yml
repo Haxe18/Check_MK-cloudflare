@@ -5,16 +5,20 @@ on:
     tags:
       - 'v*' # Trigger on tags like v1.0.0
 
-permissions:
-  contents: write
-
 jobs:
   release:
-    uses: haxe18/Check_MK-plugin_mpk_action/.github/workflows/reusable_release.yml@main
-    with:
-      plugin_name: "cloudflare"
-      title: "Cloudflare Monitoring"
-      description: "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics."
-      tag_prefix: "v"
-      changelog_filter_path: "cloudflare/"
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # all tags and commits, needed for the changelog
+
+      - uses: haxe18/Check_MK-plugin_mpk_action@v1
+        with:
+          plugin_name: "cloudflare"
+          title: "Cloudflare Monitoring"
+          description: "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics."
+          tag_prefix: "v"
+          changelog_filter_path: "cloudflare/"
