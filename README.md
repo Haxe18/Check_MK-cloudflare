@@ -12,6 +12,7 @@ Comprehensive Cloudflare monitoring for CheckMK using the Cloudflare REST and Gr
 - **Parallel API Calls**: 6-15x faster data collection using ThreadPoolExecutor
 - **Two-Tier Caching**: Discovery TTL (default: 1 hour) and Metrics TTL (default: 5 minutes), both configurable
 - **Smart Cache Invalidation**: Cache auto-invalidates when service configuration changes
+- **Transient Error Protection**: When a temporary API error occurs (HTTP 5xx, rate limit, timeout, network, invalid JSON response), the last good data is shown instead of empty or zeroed values, as long as it is not older than the discovery cache TTL (at least twice the cache TTL; 1 hour by default). The API is retried at the normal cache interval. Lasting errors such as missing permissions are cached as usual
 - **Pro+ Plan Detection**: Automatically enables performance metrics (TTFB, Origin Response Time) for Pro+ zones
 - **Unused Permission Hints**: Shows which API permissions can be removed (no resources found)
 - **API Error Tracking**: Surface permission errors and API issues in CheckMK

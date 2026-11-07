@@ -79,7 +79,7 @@ rule_spec = CheckParameters(
 
 - `CloudflareClient` - Wraps REST (`_rest_get`) and GraphQL (`_graphql_query`) APIs with retry logic
 - `CloudflareSection` - Abstract base requiring `name`, `resource_type`, `metrics`, `discover_resources()`, `fetch_analytics()`
-- `CloudflareOrchestrator` - Runs sections with two-tier caching (default discovery TTL: 1h, default metrics TTL: 5m; both configurable)
+- `CloudflareOrchestrator` - Runs sections with two-tier caching (default discovery TTL: 1h, default metrics TTL: 5m; both configurable). After a transient API error (errors with `transient: True`: HTTP 5xx, 429, timeout, network, invalid JSON response) it keeps the discovery cache and serves the last good result (`fetched_at` at most `max(discovery TTL, 2 × metrics TTL)` old) with the current errors; that result is cached again with its old `fetched_at`, so the API is retried at the normal metrics TTL. Without usable last good data the fresh result is cached with `fetched_at` 0, so it never counts as last good data
 - `ErrorCollector` - Structured error collection with categories and services (thread-safe)
 - `APICounter` - Tracks API request counts by type (thread-safe)
 
@@ -394,12 +394,13 @@ errors = self.error_collector.get_and_clear()  # Returns list[dict] and clears
     "category": "api",       # "api", "discovery", "metrics", "cache"
     "service": "workers",    # Service name or "rest"/"graphql" for client errors
     "message": "Error text",
-    "timestamp": 1734180000.0
+    "timestamp": 1734180000.0,
+    "transient": False       # True for HTTP 5xx, 429, timeout, network, invalid JSON: last good data is served
 }
 ```
 
 **ErrorCollector Methods:**
-- `add(category, service, message)` - Add a structured error
+- `add(category, service, message, transient=False)` - Add a structured error
 - `has_errors()` - Returns True if any errors collected
 - `count()` - Returns number of errors
 - `to_list()` - Returns list of error dicts

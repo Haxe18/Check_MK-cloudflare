@@ -253,7 +253,7 @@ class CloudflareOrchestrator(LoggerMixin):
 
         # Collect cached section errors from results (important for cache hits)
         # Also track services with no resources (unused permissions)
-        empty_services: list[str] = []
+        unused_permissions: dict[str, str] = {}
         for service_name, result in metrics_data.items():
             section_errors = result.get("section_errors", [])
             errors.extend(section_errors)
@@ -263,21 +263,13 @@ class CloudflareOrchestrator(LoggerMixin):
                 skipped_pro_features[service_name] = skipped_zones
             # Track services with no resources
             resources = result.get("resources", [])
-
             # Check if any API errors occurred for this service
-            has_api_errors = any(
-                e.get("category") == ERROR_CATEGORY_API for e in result.get("section_errors", [])
-            )
-
+            has_api_errors = any(e.get("category") == ERROR_CATEGORY_API for e in section_errors)
             if not resources and not result.get("error") and not has_api_errors:
-                empty_services.append(service_name)
-
-        # Map empty services to their required permissions
-        unused_permissions: dict[str, str] = {}
-        for service_name in empty_services:
-            permission = CloudflareClient.SERVICE_PERMISSIONS.get(service_name)
-            if permission:
-                unused_permissions[service_name] = permission
+                # Map empty services to their required permissions
+                permission = CloudflareClient.SERVICE_PERMISSIONS.get(service_name)
+                if permission:
+                    unused_permissions[service_name] = permission
 
         # Build final output
         output: dict[str, Any] = {
