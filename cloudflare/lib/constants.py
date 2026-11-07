@@ -28,6 +28,10 @@ DEFAULT_REQUEST_TIMEOUT = 10
 # Default maximum retries for failed requests
 DEFAULT_MAX_RETRIES = 3
 
+# Longest wait (seconds) before retrying a rate-limited (HTTP 429) request;
+# if Cloudflare asks for a longer wait, the request is not retried
+RATE_LIMIT_MAX_WAIT = 10
+
 # Default max workers for parallel API calls
 # Cloudflare rate limits: ~200 requests / 30 seconds = ~6.7 req/s
 # Using 8 workers is safe and provides good parallelism

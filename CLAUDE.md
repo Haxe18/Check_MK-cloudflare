@@ -233,6 +233,7 @@ The client uses `ThreadPoolExecutor` for parallel API calls to improve performan
 - Cloudflare allows ~200 requests / 30 seconds
 - Default `max_workers=8` is safe under this limit
 - Each method respects this by using `parallel_map()` with configurable workers
+- REST and GraphQL requests answered with HTTP 429 are retried after the `Retry-After` wait (up to `RATE_LIMIT_MAX_WAIT`, 10s; longer waits are not retried), see `CloudflareClient._request_with_retry()`
 
 **Usage Example:**
 ```python

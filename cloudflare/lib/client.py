@@ -40,6 +40,7 @@ from .constants import (
     KV_PAID_MONTHLY_WRITES,
     R2_FREE_STORAGE,
     R2_JURISDICTIONS,
+    RATE_LIMIT_MAX_WAIT,
     TIMEFRAME_24H,
     TIMEFRAME_MINUTES,
 )
@@ -177,9 +178,21 @@ class CloudflareClient(LoggerMixin):
                 response.raise_for_status()
                 return response
             except requests.exceptions.HTTPError as exc:
-                # Don't retry on 4xx client errors (403 Forbidden, 404 Not Found, etc.)
+                status_code = exc.response.status_code if exc.response is not None else None
+                if status_code == 429:
+                    # Rate limited: wait as long as Cloudflare asks, but only if that is short
+                    wait_time = self._retry_after_seconds(exc.response, default=2**attempt)
+                    if attempt >= self.max_retries - 1 or wait_time > RATE_LIMIT_MAX_WAIT:
+                        raise
+                    self.log_warning(
+                        f"Rate limited (attempt {attempt + 1}/{self.max_retries}), "
+                        f"retrying in {wait_time}s: {url}"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                # Don't retry on other 4xx client errors (403 Forbidden, 404 Not Found, etc.)
                 # These are expected responses, not transient failures
-                if exc.response is not None and 400 <= exc.response.status_code < 500:
+                if status_code is not None and 400 <= status_code < 500:
                     raise
                 last_error = exc
                 if attempt < self.max_retries - 1:
@@ -201,6 +214,22 @@ class CloudflareClient(LoggerMixin):
                     time.sleep(wait_time)
 
         raise last_error  # type: ignore
+
+    @staticmethod
+    def _retry_after_seconds(response: requests.Response | None, default: int) -> int:
+        """Read the Retry-After header (in seconds) of a rate-limited response.
+
+        Args:
+            response: The 429 response
+            default: Wait time to use if the header is missing or not a number
+
+        Returns:
+            Seconds to wait before the next attempt
+        """
+        if response is None:
+            return default
+        value = response.headers.get("Retry-After", "")
+        return int(value) if value.isdigit() else default
 
     # Permission hints for common endpoints (shows where to set permission in Cloudflare dashboard)
     PERMISSION_HINTS: dict[str, str] = {
