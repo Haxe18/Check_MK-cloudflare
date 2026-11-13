@@ -18,6 +18,8 @@ from .cloudflare_helpers import (
     discover_cloudflare_resources_by_name,
     get_resource_id_by_name,
     get_resource_metadata,
+    metric_float,
+    metric_metadata,
 )
 
 # Mapping from SingleChoice string values to Check_MK State enum integers
@@ -67,9 +69,9 @@ def check_cloudflare_zones(
         yield Result(state=State.UNKNOWN, summary="Zone not found in data")
         return
 
-    # Get zone info from metadata - item is already the zone name
-    status = metadata.get("status", "unknown")
-    paused = metadata.get("paused", False)
+    # Status and paused as fetched with the metrics (the resource metadata can be older)
+    status = metric_metadata(metrics, "status").get("status_text", "unknown")
+    paused = metric_float(metrics, "paused") > 0
     plan = metadata.get("plan", "")
 
     # Determine state

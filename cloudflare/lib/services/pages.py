@@ -144,7 +144,9 @@ class PagesSection(CloudflareSection):
             project_name = resource.id
 
             # Fetch latest production deployment
-            deployments = self.client.get_pages_deployments(project_name, limit=5)
+            deployments = self.client.get_pages_deployments(
+                project_name, limit=1, environment="production"
+            )
 
             # Find the latest production deployment
             production_deployment = None

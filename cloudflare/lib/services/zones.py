@@ -90,9 +90,14 @@ class ZonesSection(CloudflareSection):
         """
         results = []
 
+        # Status and paused in the resource metadata are as old as the discovery cache,
+        # so read the current ones; the cached values are the fallback if that fails
+        current_zones = {zone.get("id"): zone for zone in self.client.list_zones()}
+
         for resource in resources:
-            status = resource.metadata.get("status", "unknown")
-            paused = resource.metadata.get("paused", False)
+            current_zone = current_zones.get(resource.id, resource.metadata)
+            status = current_zone.get("status") or "unknown"
+            paused = current_zone.get("paused", False)
 
             # Status as numeric value (1 = active, 0 = other)
             status_value = 1.0 if status == "active" else 0.0

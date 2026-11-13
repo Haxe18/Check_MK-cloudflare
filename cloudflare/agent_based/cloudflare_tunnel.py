@@ -20,7 +20,7 @@ from .cloudflare_helpers import (
     discover_cloudflare_resources_by_name,
     extract_levels,
     get_resource_id_by_name,
-    get_resource_metadata,
+    metric_metadata,
 )
 
 
@@ -61,8 +61,6 @@ def check_cloudflare_tunnel(
         return
 
     metrics = collect_metrics_for_resource(section, SERVICE_TUNNEL, resource_id)
-    metadata = get_resource_metadata(section, SERVICE_TUNNEL, resource_id)
-
     if not metrics:
         yield Result(state=State.UNKNOWN, summary="Tunnel not found in data")
         return
@@ -71,15 +69,15 @@ def check_cloudflare_tunnel(
     status_value = metrics.get("status", {}).get("value", 0)
     connection_count = int(metrics.get("connection_count", {}).get("value", 0))
 
-    # Get tunnel info from metadata - item is already the name
-    status_text = metadata.get("status", "unknown")
+    # Status text as fetched with the metric (the resource metadata can be older)
+    status_text = metric_metadata(metrics, "status").get("status_text", "unknown")
 
     # Determine state based on tunnel status
-    if status_value >= 2:  # active
+    if status_value >= 2:  # healthy
         state = State.OK
-    elif status_value >= 1:  # inactive
+    elif status_value >= 1:  # degraded, inactive (never run)
         state = State.WARN
-    else:  # unknown
+    else:  # down, unknown
         state = State.CRIT
 
     # Build summary - item is already the human-readable name in service name

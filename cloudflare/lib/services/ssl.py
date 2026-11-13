@@ -8,9 +8,9 @@ from ..types import MetricDefinition, MetricResult, Resource
 class SSLSection(CloudflareSection):
     """Section for Cloudflare SSL/TLS monitoring.
 
-    Monitors SSL/TLS status per zone including:
-    - Certificate status (active/pending/inactive)
-    - SSL mode (off/flexible/full/strict)
+    Monitors the SSL/TLS encryption mode per zone (off/flexible/full/strict).
+    Certificates themselves are not checked: 'certificate_status' only says whether
+    SSL is switched on (active), switched off (disabled) or could not be read (unknown).
     """
 
     @property
@@ -65,21 +65,14 @@ class SSLSection(CloudflareSection):
             Empty list - SSL is a pure status check without metrics
         """
         for resource in resources:
-            # Get zone status from metadata (set during discovery)
-            zone_status = resource.metadata.get("status", "unknown")
-
             # Get SSL mode setting
             ssl_setting = self.client.get_ssl_setting(resource.id)
             ssl_mode = ssl_setting.get("value") if ssl_setting else None
 
             if ssl_mode is None:
-                # API call failed - if zone is active, assume SSL is working
-                if zone_status == "active":
-                    resource.metadata["certificate_status"] = "active"
-                    resource.metadata["ssl_mode"] = "unknown"
-                else:
-                    resource.metadata["certificate_status"] = "unknown"
-                    resource.metadata["ssl_mode"] = "unknown"
+                # API call failed - the SSL mode is not known
+                resource.metadata["certificate_status"] = "unknown"
+                resource.metadata["ssl_mode"] = "unknown"
             elif ssl_mode == "off":
                 resource.metadata["certificate_status"] = "disabled"
                 resource.metadata["ssl_mode"] = "off"

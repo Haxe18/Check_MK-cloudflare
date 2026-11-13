@@ -720,6 +720,19 @@ class CloudflareClient(LoggerMixin):
         result = self._rest_get(f"zones/{zone_id}/rulesets")
         return result if isinstance(result, list) else []
 
+    def get_zone_ruleset(self, zone_id: str, ruleset_id: str) -> dict[str, Any]:
+        """Get one ruleset of a zone with its rules.
+
+        Args:
+            zone_id: Zone ID
+            ruleset_id: Ruleset ID
+
+        Returns:
+            Ruleset object with a 'rules' list, empty if the request failed
+        """
+        result = self._rest_get(f"zones/{zone_id}/rulesets/{ruleset_id}")
+        return result if isinstance(result, dict) else {}
+
     def list_access_apps(self) -> list[dict[str, Any]]:
         """List Cloudflare Access applications.
 
@@ -789,10 +802,50 @@ class CloudflareClient(LoggerMixin):
             pool_id: Pool ID
 
         Returns:
-            Pool health data
+            {"healthy": bool, "origins": {address: {"healthy": bool, "rtt": float (ms)}}},
+            empty if the request failed
         """
         result = self._rest_get(f"accounts/{self.account_id}/load_balancers/pools/{pool_id}/health")
-        return result if isinstance(result, dict) else {}
+        pop_health = result.get("pop_health") if isinstance(result, dict) else None
+        if not isinstance(pop_health, dict):
+            return {}
+
+        # The API documents one health object; it can also be one object per PoP name
+        if "healthy" in pop_health or "origins" in pop_health:
+            pops = [pop_health]
+        else:
+            pops = [pop for pop in pop_health.values() if isinstance(pop, dict)]
+
+        # An origin counts as healthy only if every PoP reports it healthy
+        origins: dict[str, dict[str, Any]] = {}
+        for pop in pops:
+            for origin in pop.get("origins") or []:
+                for address, origin_health in origin.items():
+                    entry = origins.setdefault(address, {"healthy": True, "rtt": 0.0})
+                    entry["healthy"] = entry["healthy"] and bool(origin_health.get("healthy"))
+                    entry["rtt"] = max(entry["rtt"], self._rtt_milliseconds(origin_health.get("rtt")))
+
+        return {
+            "healthy": bool(pops) and all(pop.get("healthy", False) for pop in pops),
+            "origins": origins,
+        }
+
+    @staticmethod
+    def _rtt_milliseconds(rtt: Any) -> float:
+        """Convert a health check round trip time like "201.5ms" to milliseconds.
+
+        Args:
+            rtt: 'rtt' value of an origin health entry
+
+        Returns:
+            Milliseconds, 0.0 if the value is missing or not in that format
+        """
+        if not isinstance(rtt, str):
+            return 0.0
+        try:
+            return float(rtt.removesuffix("ms"))
+        except ValueError:
+            return 0.0
 
     def fetch_waf_analytics(
         self,
@@ -1337,7 +1390,7 @@ class CloudflareClient(LoggerMixin):
         if not namespace_ids:
             return {}
 
-        start_date, end_date = self._get_date_range(timeframe)
+        start_time, end_time = self._get_time_range(timeframe)
 
         def fetch_single_namespace(current_ns_id: str) -> dict[str, Any]:
             """Fetch analytics for a single KV namespace."""
@@ -1356,14 +1409,14 @@ class CloudflareClient(LoggerMixin):
             }
 
             query = """
-            query GetKVOperations($accountTag: String!, $namespaceId: String!, $dateStart: Date!, $dateEnd: Date!) {
+            query GetKVOperations($accountTag: String!, $namespaceId: String!, $datetimeStart: Time!, $datetimeEnd: Time!) {
               viewer {
                 accounts(filter: {accountTag: $accountTag}) {
                   kvOperationsAdaptiveGroups(
                     filter: {
                       namespaceId: $namespaceId
-                      date_geq: $dateStart
-                      date_leq: $dateEnd
+                      datetime_geq: $datetimeStart
+                      datetime_leq: $datetimeEnd
                     }
                     limit: 1000
                   ) {
@@ -1388,8 +1441,8 @@ class CloudflareClient(LoggerMixin):
             variables = {
                 "accountTag": self.account_id,
                 "namespaceId": current_ns_id,
-                "dateStart": start_date,
-                "dateEnd": end_date,
+                "datetimeStart": start_time,
+                "datetimeEnd": end_time,
             }
 
             data = self._graphql_query(query, variables)
@@ -1473,7 +1526,12 @@ class CloudflareClient(LoggerMixin):
             }
             """
 
-            storage_variables = {**variables, "dateStart": storage_start, "dateEnd": storage_end}
+            storage_variables = {
+                "accountTag": self.account_id,
+                "namespaceId": current_ns_id,
+                "dateStart": storage_start,
+                "dateEnd": storage_end,
+            }
             storage_data = self._graphql_query(storage_query, storage_variables)
             storage_accounts = (storage_data.get("viewer") or {}).get("accounts", [])
 
@@ -1530,20 +1588,20 @@ class CloudflareClient(LoggerMixin):
         if not namespace_ids:
             return {}
 
-        start_date, end_date = self._get_date_range(timeframe)
+        start_time, end_time = self._get_time_range(timeframe)
 
         def fetch_single_namespace_status(current_ns_id: str) -> dict[str, int]:
             """Fetch read status for a single namespace."""
             query = """
-            query KVReadStatus($accountTag: String!, $namespaceId: String!, $dateStart: Date!, $dateEnd: Date!) {
+            query KVReadStatus($accountTag: String!, $namespaceId: String!, $datetimeStart: Time!, $datetimeEnd: Time!) {
               viewer {
                 accounts(filter: {accountTag: $accountTag}) {
                   kvOperationsAdaptiveGroups(
                     limit: 10000
                     filter: {
                       namespaceId: $namespaceId
-                      date_geq: $dateStart
-                      date_leq: $dateEnd
+                      datetime_geq: $datetimeStart
+                      datetime_leq: $datetimeEnd
                       actionType: "read"
                     }
                   ) {
@@ -1560,8 +1618,8 @@ class CloudflareClient(LoggerMixin):
             variables = {
                 "accountTag": self.account_id,
                 "namespaceId": current_ns_id,
-                "dateStart": start_date,
-                "dateEnd": end_date,
+                "datetimeStart": start_time,
+                "datetimeEnd": end_time,
             }
 
             data = self._graphql_query(query, variables)
@@ -1826,17 +1884,14 @@ class CloudflareClient(LoggerMixin):
         start_dt = now - timedelta(minutes=minutes)
         end_dt = now
 
-        # Current hour start (for ensuring httpRequests1hGroups coverage)
-        current_hour = now.replace(minute=0, second=0, microsecond=0)
-
-        # Calculate adjusted start time for 1h groups
-        # If normal start time is after current hour start, we need to go back
-        # to just before current hour to capture the current hour's bucket
-        if start_dt > current_hour:
-            # -1 second to satisfy datetime_gt (strictly greater)
-            adjusted_start_dt = current_hour - timedelta(seconds=1)
-        else:
-            adjusted_start_dt = start_dt
+        # httpRequests1hGroups only has whole hours, and a bucket counts only if its start
+        # lies inside the query window. Start at the hour the timeframe begins in, so that
+        # bucket is included: the data always covers the whole timeframe (plus up to one
+        # hour) instead of losing the first, partly covered hour.
+        # -1 second to satisfy datetime_gt (strictly greater)
+        adjusted_start_dt = start_dt.replace(minute=0, second=0, microsecond=0) - timedelta(
+            seconds=1
+        )
 
         # Format times
         original_start_time = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2090,7 +2145,8 @@ class CloudflareClient(LoggerMixin):
 
         # Force 24h timeframe for R2 storage metrics as they are snapshots
         # and may not appear in shorter windows (like 5m or 1h)
-        # Using 24h ensures we find the latest snapshot
+        # Using 24h ensures we find the latest snapshot; rows come newest first
+        # and only the newest one per bucket is used
         start_time, end_time = self._get_time_range("24h")
 
         query = """
@@ -2102,10 +2158,12 @@ class CloudflareClient(LoggerMixin):
                   datetime_geq: $datetimeStart
                   datetime_leq: $datetimeEnd
                 }
-                limit: 1000
+                limit: 10000
+                orderBy: [datetime_DESC]
               ) {
                 dimensions {
                   bucketName
+                  datetime
                 }
                 max {
                   payloadSize
@@ -2135,6 +2193,7 @@ class CloudflareClient(LoggerMixin):
         analytics: dict[str, dict[str, Any]] = {
             name: empty_analytics.copy() for name in bucket_names
         }
+        buckets_with_snapshot: set[str] = set()
 
         if accounts:
             groups = accounts[0].get("r2StorageAdaptiveGroups", [])
@@ -2174,23 +2233,13 @@ class CloudflareClient(LoggerMixin):
                             target_bucket = name
                             break
 
-                if target_bucket:
+                if target_bucket and target_bucket not in buckets_with_snapshot:
+                    # First row of a bucket is its newest snapshot (datetime_DESC)
+                    buckets_with_snapshot.add(target_bucket)
                     max_data = group.get("max", {})
-                    # Only update if values are non-zero (or if we haven't found data yet)
-                    # Since we query 24h, we might get multiple groups if not grouped by bucket?
-                    # The query groups by nothing explicit, but dimensions includes bucketName.
-                    # It returns max payloadSize/objectCount in the period.
-
-                    storage_bytes = float(max_data.get("payloadSize", 0))
-                    object_count = float(max_data.get("objectCount", 0))
-
-                    # Store the max values found (in case of multiple groups/snapshots)
-                    current_storage = float(analytics[target_bucket].get("storage_bytes", 0))
-                    current_objects = float(analytics[target_bucket].get("object_count", 0))
-
                     analytics[target_bucket] = {
-                        "storage_bytes": max(current_storage, storage_bytes),
-                        "object_count": max(current_objects, object_count),
+                        "storage_bytes": float(max_data.get("payloadSize", 0)),
+                        "object_count": float(max_data.get("objectCount", 0)),
                     }
 
         return analytics
@@ -2365,20 +2414,20 @@ class CloudflareClient(LoggerMixin):
         if not database_ids:
             return {}
 
-        start_date, end_date = self._get_date_range(timeframe)
+        start_time, end_time = self._get_time_range(timeframe)
 
         def fetch_single_database(current_db_id: str) -> dict[str, Any]:
             """Fetch analytics for a single D1 database."""
             query = """
-            query D1Analytics($accountTag: String!, $databaseId: String!, $dateStart: Date!, $dateEnd: Date!) {
+            query D1Analytics($accountTag: String!, $databaseId: String!, $datetimeStart: Time!, $datetimeEnd: Time!) {
               viewer {
                 accounts(filter: {accountTag: $accountTag}) {
                   d1AnalyticsAdaptiveGroups(
                     limit: 100
                     filter: {
                       databaseId: $databaseId
-                      date_geq: $dateStart
-                      date_leq: $dateEnd
+                      datetime_geq: $datetimeStart
+                      datetime_leq: $datetimeEnd
                     }
                   ) {
                     sum {
@@ -2400,8 +2449,8 @@ class CloudflareClient(LoggerMixin):
             variables = {
                 "accountTag": self.account_id,
                 "databaseId": current_db_id,
-                "dateStart": start_date,
-                "dateEnd": end_date,
+                "datetimeStart": start_time,
+                "datetimeEnd": end_time,
             }
 
             data = self._graphql_query(query, variables)
@@ -2464,18 +2513,20 @@ class CloudflareClient(LoggerMixin):
 
     def fetch_d1_daily_usage(
         self,
-        databases: list[dict[str, Any]],
+        total_databases: int,
+        total_storage: int,
     ) -> dict[str, Any]:
         """Fetch D1 account-wide daily usage and monitoring thresholds.
 
         Args:
-            databases: List of D1 database objects from list_d1_databases()
+            total_databases: Number of D1 databases
+            total_storage: Size of all D1 databases in bytes (from fetch_d1_file_sizes())
 
         Returns:
             Dictionary with usage and limit data:
             - total_databases: Number of D1 databases
             - max_databases: Plan limit for databases
-            - total_storage: Total storage in bytes (sum of file_size)
+            - total_storage: Total storage in bytes
             - max_storage: Plan limit for storage in bytes
             - daily_rows_read: Rows read today (across all databases)
             - daily_rows_read_limit: Plan limit for daily rows read
@@ -2483,10 +2534,6 @@ class CloudflareClient(LoggerMixin):
             - daily_rows_written_limit: Plan limit for daily rows written
             - is_paid_plan: Whether account has paid plan
         """
-        # Count databases and sum storage from REST API data
-        total_databases = len(databases)
-        total_storage = sum(db.get("file_size", 0) for db in databases)
-
         # Query GraphQL for today's rows read/written across ALL databases
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
@@ -2587,12 +2634,15 @@ class CloudflareClient(LoggerMixin):
         """
         return self._rest_get_paged(f"accounts/{self.account_id}/pages/projects")
 
-    def get_pages_deployments(self, project_name: str, limit: int = 5) -> list[dict[str, Any]]:
+    def get_pages_deployments(
+        self, project_name: str, limit: int = 5, environment: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get deployments for a Pages project.
 
         Args:
             project_name: Project name
             limit: Maximum number of deployments to return (default 5)
+            environment: Only deployments of this environment ("production" or "preview")
 
         Returns:
             List of deployment objects sorted by created_on (newest first)
@@ -2601,6 +2651,8 @@ class CloudflareClient(LoggerMixin):
             f"accounts/{self.account_id}/pages/projects/{project_name}/deployments"
             f"?per_page={limit}"
         )
+        if environment:
+            endpoint += f"&env={environment}"
         result = self._rest_get(endpoint)
         return result if isinstance(result, list) else []
 

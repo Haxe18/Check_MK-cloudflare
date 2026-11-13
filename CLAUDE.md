@@ -310,8 +310,8 @@ The plugin is uploaded via Check_MK WATO "Extension Packages" page.
 
 **Zone Analytics Data Collection (`httpRequests1hGroups`):**
 - **Hourly Bucketing:** Basic metrics (requests, bytes, threats) are aggregated in 1-hour buckets aligned to the hour (HH:00).
-- **Timeframe Logic:** If the query `since` parameter is later than the start of the current hour (e.g. requesting last 5m at 10:15), Cloudflare's API excludes the current hour's bucket entirely.
-- **Client Adjustment:** To fix this, `fetch_zone_analytics` automatically adjusts `since` to `current_hour - 1s` when necessary. This ensures the current incomplete bucket is returned.
+- **Timeframe Logic:** A bucket is only returned if its start (HH:00) lies inside the query window. With the plain timeframe the first, partly covered hour would be lost (e.g. 1h at 10:15 would only return the 10:00 bucket).
+- **Client Adjustment:** `fetch_zone_analytics` moves `since` to one second before the hour the timeframe begins in. The values cover the whole timeframe plus up to one extra hour.
 - **Pro+ Zones:** These zones run two queries:
   1. `httpRequests1hGroups` with adjusted time (for basic counters)
   2. `httpRequestsAdaptiveGroups` with precise time (for performance quantiles)
@@ -346,14 +346,31 @@ The plugin is uploaded via Check_MK WATO "Extension Packages" page.
 - Timing values are in **microseconds** - must divide by 1000 for milliseconds
 - Filter by `scriptName` (project name)
 
+**KV Operations (`kvOperationsAdaptiveGroups`):**
+- Per-namespace operations and read status filter on `datetime_geq`/`datetime_leq`, so they cover exactly the timeframe
+- Daily and monthly usage filter on `date` (calendar day/month in UTC)
+
 **D1 Analytics (`d1AnalyticsAdaptiveGroups`):**
 - Uses `d1AnalyticsAdaptiveGroups` node
+- Per-database analytics filter on `datetime_geq`/`datetime_leq`; the daily usage filters on `date`
 - Available metrics: `rowsRead`, `rowsWritten`, `readQueries`, `writeQueries` (sum), and `queryBatchTimeMs` (avg)
 
 **R2 Storage Analytics (`r2StorageAdaptiveGroups`):**
 - Uses `r2StorageAdaptiveGroups` node
 - Metrics: `payloadSize` (storage), `objectCount`
-- **Important**: These are snapshot metrics. The plugin forces a 24h query window to ensure the latest snapshot is found, as they may not appear in shorter windows.
+- **Important**: These are snapshot metrics. The plugin forces a 24h query window to ensure the latest snapshot is found, as they may not appear in shorter windows. Rows are ordered `datetime_DESC` and only the newest row per bucket is used.
+
+### REST API Notes
+
+- **Lists with pages:** `_rest_get_paged()` follows `result_info` (page number until `total_count` is reached, or the `cursor` for R2). The account-wide resource lists use it; rulesets of a zone, policies of an Access app and load balancers of a zone still read one page with `_rest_get()`
+- **Zones:** `list_zones()` filters on `account.id`, so only zones of the configured account are monitored
+- **Tunnels:** `list_tunnels()` sends `is_deleted=false`. Status values are `healthy`, `degraded`, `inactive` (never run) and `down`. The status is read fresh on every metrics run; the discovery cache only supplies the tunnel list
+- **Zone status:** `ZonesSection.fetch_analytics()` reads status and paused fresh as well. Checks take them from the metric metadata (`status_text`), not from the resource metadata
+- **Load balancer pool health:** `get_pool_health()` turns `pop_health` into `{"healthy", "origins": {address: {"healthy", "rtt"}}}`. It accepts one health object (as documented) and one object per PoP name; `rtt` comes as a string like `"201.5ms"`
+- **D1 size:** the database list has no `file_size`; `fetch_d1_file_sizes()` reads each database on its own
+- **Rulesets:** the ruleset list has no rules; `get_zone_ruleset()` is read for each ruleset of a monitored phase and its rules are counted
+- **Pages:** the newest production deployment is read with `env=production`
+- **SSL:** only the encryption mode (`settings/ssl`) is read, certificates are not checked. If it cannot be read the check is UNKNOWN
 
 ### API Token
 

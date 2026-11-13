@@ -35,13 +35,13 @@ Comprehensive Cloudflare monitoring for CheckMK using the Cloudflare REST and Gr
 | **R2** | R2 Storage Buckets | location, storage, object_count |
 | **R2 Global** | R2 Usage vs Included Free Tier | total_storage vs included free tier |
 | **WAF** | Security Events | total_events, blocked, challenged |
-| **Rulesets** | Zone Rulesets (Redirect, Cache, Config, Origin) | ruleset_count, redirect, cache, config, origin |
+| **Rulesets** | Zone Rulesets (Redirect, Cache, Config, Origin) | ruleset_count, number of redirect, cache, config, origin rules |
 | **Tunnel** | Cloudflare Tunnel | status, connection_count |
 | **Access** | Access Applications | policy_count, allowed_idps |
 | **Load Balancer** | Load Balancer Pools | healthy, origin_count, healthy_origins, health_rtt |
 | **D1** | D1 Databases | database_count, storage, queries, rows_read, rows_written, duration |
 | **D1 Global** | D1 Free Tier Monitoring | databases, storage, rows_read, rows_written vs included free tier |
-| **SSL** | SSL/TLS Status | certificate_status, ssl_mode |
+| **SSL** | SSL/TLS Encryption Mode (certificates are not checked) | ssl_mode (off = WARN, not readable = UNKNOWN) |
 | **Pages** | Cloudflare Pages | deployment_status, deployment_age, functions_invocations* |
 
 **Note:** Account-wide usage/limit metrics are shown in the corresponding **\* Global** services (Workers, KV, D1, R2), not in per-resource services.
@@ -222,7 +222,11 @@ The existing release workflow (`release.yml`) already triggers on `v*` tags, so 
 - If `free_tier_monitoring=False`, free-tier percentage escalation is disabled, but metrics are still collected and graphed.
 
 ### Data Discrepancy vs Cloudflare Dashboard
-- **Free Zones**: Cloudflare aggregates basic metrics (requests, bandwidth) in 1-hour buckets aligned to the hour. The plugin automatically adjusts query timeframes to capture the current partial hour, ensuring up-to-date data.
+- **Zone Analytics**: Cloudflare aggregates basic metrics (requests, bandwidth) in 1-hour buckets aligned to the hour. The plugin starts at the hour the timeframe begins in, so the values cover the whole timeframe plus up to one extra hour (for example 1h at 10:15 covers 09:00-10:15).
+- **KV and D1**: Per-namespace and per-database values cover exactly the configured timeframe. Daily and monthly usage values follow the calendar day and month (UTC).
+- **R2**: Storage and object count are the newest snapshot of the last 24 hours.
+- **Zones**: Only zones of the configured account are monitored, even if the token can see more.
+- **Tunnels**: Deleted tunnels are not monitored. Status `healthy` is OK, `degraded` and `inactive` (never run) are WARN, `down` is CRIT.
 - **Timeframes**: The Dashboard often uses different aggregation windows than the plugin (which defaults to 24h for some views but 5m for rate calculation in CheckMK).
 
 ## API Documentation

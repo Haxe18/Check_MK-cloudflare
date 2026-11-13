@@ -2,6 +2,7 @@
 """Rulesets section for Cloudflare monitoring."""
 
 from ..base import CloudflareSection
+from ..parallel import parallel_map
 from ..types import MetricDefinition, MetricResult, Resource, create_metric
 
 # Ruleset phases we monitor (replacing Page Rules functionality)
@@ -18,8 +19,8 @@ class RulesetsSection(CloudflareSection):
     """Section for Cloudflare Rulesets monitoring.
 
     Monitors zone rulesets including:
-    - Total ruleset count
-    - Rules by type (redirect, cache, config, origin)
+    - Number of monitored rulesets
+    - Number of rules by type (redirect, cache, config, origin)
     """
 
     @property
@@ -73,27 +74,41 @@ class RulesetsSection(CloudflareSection):
         Returns:
             List of metric results
         """
-        results: list[MetricResult] = []
 
-        for resource in resources:
-            rulesets = self.client.list_zone_rulesets(resource.id)
-
-            # Count rulesets by phase type
-            counts = {
+        def count_zone_rules(zone_id: str) -> tuple[int, dict[str, int]]:
+            """Count the monitored rulesets of a zone and their rules by type."""
+            ruleset_count = 0
+            rule_counts = {
                 "redirect": 0,
                 "cache": 0,
                 "config": 0,
                 "origin": 0,
             }
 
-            for ruleset in rulesets:
-                phase = ruleset.get("phase", "")
-                if phase in MONITORED_PHASES:
-                    rule_type = MONITORED_PHASES[phase]
-                    counts[rule_type] += 1
+            for ruleset in self.client.list_zone_rulesets(zone_id):
+                rule_type = MONITORED_PHASES.get(ruleset.get("phase", ""))
+                ruleset_id = ruleset.get("id")
+                if not rule_type or not ruleset_id:
+                    continue
 
-            # Total rulesets (only the monitored ones)
-            total_rulesets = sum(counts.values())
+                # The ruleset list has no rules, so each monitored ruleset is read on its own
+                ruleset_count += 1
+                rules = self.client.get_zone_ruleset(zone_id, ruleset_id).get("rules") or []
+                rule_counts[rule_type] += len(rules)
+
+            return ruleset_count, rule_counts
+
+        zone_counts = parallel_map(
+            count_zone_rules, [resource.id for resource in resources], logger=self
+        )
+
+        results: list[MetricResult] = []
+
+        for resource in resources:
+            total_rulesets, counts = zone_counts.get(resource.id) or (
+                0,
+                {"redirect": 0, "cache": 0, "config": 0, "origin": 0},
+            )
 
             results.append(
                 create_metric(

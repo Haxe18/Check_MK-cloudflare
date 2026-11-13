@@ -65,7 +65,8 @@ def check_cloudflare_ssl(
     cert_status = metadata.get("certificate_status", "unknown")
     ssl_mode = metadata.get("ssl_mode", "unknown")
 
-    # Determine state based on certificate status
+    # 'certificate_status' is derived from the SSL mode (certificates are not checked):
+    # active = SSL switched on, disabled = mode "off", unknown = mode could not be read
     if cert_status == "active":
         state = State.OK
     elif cert_status == "disabled":
@@ -74,20 +75,17 @@ def check_cloudflare_ssl(
     elif cert_status == "pending":
         # Check if user wants to warn on pending (default: warn)
         state = State(STATE_MAP.get(params.get("warn_on_pending", "warn"), 1))
-    elif cert_status == "unknown":
-        # Could not determine status (API permission issue?)
-        # But if we got here, the zone exists - show as OK with note
-        state = State.OK
     else:
-        # Truly unknown status
+        # SSL mode could not be read (API error, missing permission)
         state = State.UNKNOWN
 
     # Format SSL mode for display
     mode_display = ssl_mode.upper() if ssl_mode != "unknown" else "Unknown"
+    ssl_display = {"active": "enabled", "disabled": "disabled"}.get(cert_status, cert_status)
 
     yield Result(
         state=state,
-        summary=f"Certificate {cert_status}, Mode: {mode_display}",
+        summary=f"SSL {ssl_display}, Mode: {mode_display}",
     )
 
 

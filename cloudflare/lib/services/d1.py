@@ -109,7 +109,6 @@ class D1Section(CloudflareSection):
                         "name": db_name,
                         "version": database.get("version", "unknown"),
                         "created_at": database.get("created_at"),
-                        "file_size": database.get("file_size", 0),
                     },
                     available_metrics=[m.name for m in self.metrics[:6]],
                 )
@@ -136,11 +135,15 @@ class D1Section(CloudflareSection):
         # Separate global resource from database resources
         global_resource = next((r for r in resources if r.id == self.USAGE_RESOURCE_ID), None)
         db_resources = [r for r in resources if r.id != self.USAGE_RESOURCE_ID]
+        db_ids = [r.id for r in db_resources]
+
+        # Sizes are not part of the database list, so they are read per database
+        file_sizes = self.client.fetch_d1_file_sizes(db_ids)
 
         # Fetch account-wide usage (always, regardless of timeframe)
         if global_resource:
             databases = global_resource.metadata.get("_databases", [])
-            usage = self.client.fetch_d1_daily_usage(databases)
+            usage = self.client.fetch_d1_daily_usage(len(databases), sum(file_sizes.values()))
             is_paid = usage.get("is_paid_plan", False)
             paid_meta = {"is_paid_plan": is_paid}
 
@@ -279,12 +282,11 @@ class D1Section(CloudflareSection):
 
         # Fetch per-database analytics for the configured timeframe
         if db_resources:
-            db_ids = [r.id for r in db_resources]
             analytics_data = self.client.fetch_d1_analytics(db_ids, timeframe)
 
             for resource in db_resources:
                 version = resource.metadata.get("version", "unknown")
-                file_size = resource.metadata.get("file_size", 0)
+                file_size = file_sizes.get(resource.id, 0)
 
                 analytics = analytics_data.get(resource.id, {})
 
@@ -350,16 +352,15 @@ class D1Section(CloudflareSection):
                     )
                 )
 
-                if analytics.get("duration_avg", 0) > 0:
-                    results.append(
-                        create_metric(
-                            resource,
-                            "duration_avg",
-                            float(analytics.get("duration_avg", 0)),
-                            "Avg Duration",
-                            "gauge",
-                            timeframe,
-                        )
+                results.append(
+                    create_metric(
+                        resource,
+                        "duration_avg",
+                        float(analytics.get("duration_avg", 0)),
+                        "Avg Duration",
+                        "gauge",
+                        timeframe,
                     )
+                )
 
         return results

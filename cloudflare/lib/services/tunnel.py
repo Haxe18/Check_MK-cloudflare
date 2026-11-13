@@ -95,14 +95,20 @@ class TunnelSection(CloudflareSection):
         """
         results = []
 
+        # The status in the resource metadata is as old as the discovery cache,
+        # so read the current one; the cached status is the fallback if that fails
+        current_status = {
+            tunnel.get("id"): tunnel.get("status") for tunnel in self.client.list_tunnels()
+        }
+
         for resource in resources:
-            status = resource.metadata.get("status", "unknown")
+            status = current_status.get(resource.id) or resource.metadata.get("status", "unknown")
 
             # Status as numeric value
-            # active = 2, inactive = 1, unknown = 0
-            if status == "active":
+            # healthy = 2, degraded/inactive = 1, down/unknown = 0
+            if status == "healthy":
                 status_value = 2.0
-            elif status == "inactive":
+            elif status in ("degraded", "inactive"):
                 status_value = 1.0
             else:
                 status_value = 0.0
