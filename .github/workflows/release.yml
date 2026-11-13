@@ -21,4 +21,5 @@ jobs:
           title: "Cloudflare Monitoring"
           description: "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics."
           tag_prefix: "v"
+          usable_until: "3.0.0"  # Checkmk 3.0 is not covered, see README "Requirements"
           changelog_filter_path: "cloudflare/"

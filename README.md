@@ -76,6 +76,10 @@ Create an API Token with the following permissions:
 
 **Note**: The `Cloudflare API Usage` check shows which permissions are unused (no resources found), helping you remove unnecessary permissions.
 
+## Requirements
+
+Checkmk 2.4 or 2.5. Older versions are not supported. Checkmk 3.0 is not released yet and not covered: the package is marked as usable until 3.0.0, so Checkmk disables it on an upgrade to 3.0.
+
 ## Installation
 
 ### From GitHub Releases

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Check_MK (Checkmk) monitoring plugin for Cloudflare services. It uses the Cloudflare REST and GraphQL APIs to collect metrics and monitor various Cloudflare resources.
 
+**Supported Checkmk versions:** 2.4 and 2.5. Do not add code for 2.3 or older. Besides the plugin APIs (`cmk.agent_based.v2`, `cmk.rulesets.v1`, `cmk.server_side_calls.v1`, `cmk.graphing.v1`) the agent uses two internal Checkmk modules that can change with a new version: `cmk.utils.password_store.lookup` and `cmk.utils.paths.tmp_dir`.
+
 ## Architecture
 
 ### Directory Structure
@@ -263,8 +265,11 @@ Build .mkp package:
   --plugin-name cloudflare \
   --title "Cloudflare Monitoring" \
   --description "Cloudflare Monitoring Plugin - monitors Cloudflare usage/metrics." \
-  --version 1.1.0
+  --version 1.1.0 \
+  --usable-until 3.0.0
 ```
+
+`--usable-until 3.0.0` (in the release workflow: `usable_until`) makes Checkmk disable the package on an upgrade to 3.0. Raise it only after the plugin was checked against that version.
 
 The plugin is uploaded via Check_MK WATO "Extension Packages" page.
 
