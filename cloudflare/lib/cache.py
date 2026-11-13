@@ -3,6 +3,7 @@
 
 import fcntl
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -113,18 +114,19 @@ class DataCache(LoggerMixin):
         if config_key is not None:
             cache_data["_config_key"] = config_key
 
+        # Write a temporary file and move it into place, so a run reading at the same
+        # time sees either the old or the new file, never a half-written one
+        temp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
+
         try:
-            with open(cache_path, "w", encoding="utf-8") as file_handle:
-                # Acquire exclusive lock for writing
-                fcntl.flock(file_handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    json.dump(cache_data, file_handle)
-                finally:
-                    fcntl.flock(file_handle.fileno(), fcntl.LOCK_UN)
+            with open(temp_path, "w", encoding="utf-8") as file_handle:
+                json.dump(cache_data, file_handle)
+            os.replace(temp_path, cache_path)
 
             self.log_debug(f"Cache saved for key {key}")
 
         except OSError as exc:
+            temp_path.unlink(missing_ok=True)
             self.log_warning(f"Failed to save cache for key {key}: {exc}")
 
     def delete(self, key: str) -> None:

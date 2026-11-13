@@ -145,7 +145,8 @@ def _print_cloudflare_section(payload: dict, cache_ttl: int) -> None:
         payload: Section payload to print as JSON.
         cache_ttl: Cache TTL value for the section header.
     """
-    cache_timestamp = int(time.time())
+    # Time the data was fetched, so Checkmk shows its real age (also for last good data)
+    cache_timestamp = int(payload.get("CloudflareConfig", {}).get("fetched_at", time.time()))
     print(f"<<<cloudflare:sep(0):cached({cache_timestamp},{cache_ttl})>>>")
     print(json.dumps(payload))
 

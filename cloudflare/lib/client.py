@@ -9,6 +9,7 @@ import requests
 
 from .cache import APICounter
 from .constants import (
+    AGENT_TIME_BUDGET,
     CLOUDFLARE_API_BASE_URL,
     CLOUDFLARE_ERROR_CODE_UNAUTHORIZED,
     CLOUDFLARE_GRAPHQL_URL,
@@ -41,6 +42,7 @@ from .constants import (
     R2_FREE_STORAGE,
     R2_JURISDICTIONS,
     RATE_LIMIT_MAX_WAIT,
+    REST_MAX_PAGES,
     TIMEFRAME_24H,
     TIMEFRAME_MINUTES,
 )
@@ -97,6 +99,7 @@ class CloudflareClient(LoggerMixin):
         self.timeout = timeout
         self.max_retries = max_retries
         self.error_collector = ErrorCollector()  # Collect errors for reporting to Check_MK
+        self._deadline = time.monotonic() + AGENT_TIME_BUDGET
 
         self._headers = {
             "Authorization": f"Bearer {api_token}",
@@ -172,6 +175,11 @@ class CloudflareClient(LoggerMixin):
         last_error: Exception | None = None
 
         for attempt in range(self.max_retries):
+            # Raised outside the try, so it is not retried with a backoff wait
+            if time.monotonic() > self._deadline:
+                raise requests.exceptions.Timeout(
+                    f"Time budget of {AGENT_TIME_BUDGET}s for this agent run is used up"
+                )
             try:
                 self.api_counter.increment(endpoint_type=endpoint_type)
                 response = requests.request(method, url, timeout=timeout, **kwargs)
@@ -395,6 +403,22 @@ class CloudflareClient(LoggerMixin):
         return status_code is None or status_code == 429 or status_code >= 500
 
     @staticmethod
+    def _is_transient_graphql_message(error_message: str) -> bool:
+        """Return True if a GraphQL error message names a temporary problem.
+
+        Cloudflare words these as "... please try again later", "... try again after
+        5 minutes" (rate limit budget) or "Internal server error".
+
+        Args:
+            error_message: 'message' of an entry in the GraphQL 'errors' list
+
+        Returns:
+            True for errors that are likely gone on a later run
+        """
+        lowered = error_message.lower()
+        return "try again" in lowered or "internal server error" in lowered
+
+    @staticmethod
     def _format_api_error_message(
         prefix: str,
         endpoint: str,
@@ -429,20 +453,89 @@ class CloudflareClient(LoggerMixin):
         Returns:
             Result data from response
         """
+        payload = self._rest_request(endpoint, headers=headers)
+        return payload.get("result", []) if payload is not None else []
+
+    def _rest_get_paged(
+        self,
+        endpoint: str,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        result_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read all pages of a REST list endpoint.
+
+        Follows the cursor if the response has one (R2), otherwise the page number
+        until 'total_count' entries are read.
+
+        Args:
+            endpoint: API endpoint (without base URL)
+            headers: Optional headers to merge with default headers
+            params: Optional query parameters sent with every page
+            result_key: Key of the list inside 'result' if it is wrapped in an object
+                (R2: "buckets")
+
+        Returns:
+            Entries of all pages; the pages read so far if a request fails
+        """
+        items: list[dict[str, Any]] = []
+        page_params: dict[str, Any] = dict(params or {})
+
+        for _ in range(REST_MAX_PAGES):
+            payload = self._rest_request(endpoint, headers=headers, params=page_params)
+            if payload is None:
+                break
+
+            result = payload.get("result")
+            if result_key and isinstance(result, dict):
+                result = result.get(result_key)
+            if not isinstance(result, list) or not result:
+                break
+            items.extend(result)
+
+            result_info = payload.get("result_info") or {}
+            cursor = result_info.get("cursor")
+            if cursor:
+                page_params["cursor"] = cursor
+                continue
+
+            total_count = result_info.get("total_count")
+            if total_count is None or len(items) >= total_count:
+                break
+            page_params["page"] = result_info.get("page", 1) + 1
+
+        return items
+
+    def _rest_request(
+        self,
+        endpoint: str,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Make REST API GET request and record its errors.
+
+        Args:
+            endpoint: API endpoint (without base URL)
+            headers: Optional headers to merge with default headers
+            params: Optional query parameters
+
+        Returns:
+            Whole response payload ('result', 'result_info', ...), None if the request failed
+        """
         url = f"{self.BASE_URL}/{endpoint}"
 
         try:
-            response = self._request_with_retry("GET", url, headers=headers)
+            response = self._request_with_retry("GET", url, headers=headers, params=params)
             data = response.json()
 
             if data.get("success"):
-                return data.get("result", [])
+                return data
 
             errors = data.get("errors", [])
             self.log_error(f"API error for {endpoint}: {errors}")
             error_details = self._extract_api_error_details(errors)
             if self._add_auth_error(endpoint, error_details):
-                return []
+                return None
             if not error_details:
                 self.error_collector.add(
                     ERROR_CATEGORY_API, ERROR_SERVICE_REST, f"REST API: {endpoint}"
@@ -459,7 +552,7 @@ class CloudflareClient(LoggerMixin):
                             error_message=message,
                         ),
                     )
-            return []
+            return None
 
         # JSONDecodeError is also a RequestException, so it must be caught first
         except requests.exceptions.JSONDecodeError as exc:
@@ -470,7 +563,7 @@ class CloudflareClient(LoggerMixin):
                 f"REST API JSON error: {endpoint}",
                 transient=True,
             )
-            return []
+            return None
         except requests.exceptions.RequestException as exc:
             self.log_error(f"Request failed for {endpoint}: {exc}")
             status_code: int | None = None
@@ -499,7 +592,7 @@ class CloudflareClient(LoggerMixin):
                     ),
                     transient=self._is_transient_status(status_code),
                 )
-            return []
+            return None
 
     def _graphql_query(
         self,
@@ -529,7 +622,10 @@ class CloudflareClient(LoggerMixin):
                     error_msg = error.get("message", str(error))
                     self.log_error(f"GraphQL error: {error_msg}")
                     self.error_collector.add(
-                        ERROR_CATEGORY_API, ERROR_SERVICE_GRAPHQL, f"GraphQL: {error_msg}"
+                        ERROR_CATEGORY_API,
+                        ERROR_SERVICE_GRAPHQL,
+                        f"GraphQL: {error_msg}",
+                        transient=self._is_transient_graphql_message(error_msg),
                     )
 
             return data.get("data") or {}
@@ -582,17 +678,15 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of KV namespace objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/storage/kv/namespaces")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(f"accounts/{self.account_id}/storage/kv/namespaces")
 
     def list_zones(self) -> list[dict[str, Any]]:
-        """List all DNS zones.
+        """List all DNS zones of the configured account.
 
         Returns:
             List of zone objects
         """
-        result = self._rest_get("zones")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged("zones", params={"account.id": self.account_id})
 
     def list_r2_buckets(self, jurisdiction: str | None = None) -> list[dict[str, Any]]:
         """List all R2 buckets.
@@ -607,14 +701,12 @@ class CloudflareClient(LoggerMixin):
         if jurisdiction:
             headers["cf-r2-jurisdiction"] = jurisdiction
 
-        result = self._rest_get(
+        # R2 API wraps buckets in a "buckets" key
+        return self._rest_get_paged(
             f"accounts/{self.account_id}/r2/buckets",
             headers=headers if headers else None,
+            result_key="buckets",
         )
-        # R2 API wraps buckets in a "buckets" key
-        if isinstance(result, dict):
-            return result.get("buckets", [])
-        return result if isinstance(result, list) else []
 
     def list_zone_rulesets(self, zone_id: str) -> list[dict[str, Any]]:
         """List rulesets for a zone.
@@ -634,8 +726,7 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of Access application objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/access/apps")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(f"accounts/{self.account_id}/access/apps")
 
     def list_access_policies(self, app_id: str) -> list[dict[str, Any]]:
         """List policies for an Access application.
@@ -650,13 +741,14 @@ class CloudflareClient(LoggerMixin):
         return result if isinstance(result, list) else []
 
     def list_tunnels(self) -> list[dict[str, Any]]:
-        """List Cloudflare Tunnels.
+        """List Cloudflare Tunnels that are not deleted.
 
         Returns:
             List of tunnel objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/cfd_tunnel")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(
+            f"accounts/{self.account_id}/cfd_tunnel", params={"is_deleted": "false"}
+        )
 
     def get_tunnel_connections(self, tunnel_id: str) -> list[dict[str, Any]]:
         """Get connections for a tunnel.
@@ -688,8 +780,7 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of pool objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/load_balancers/pools")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(f"accounts/{self.account_id}/load_balancers/pools")
 
     def get_pool_health(self, pool_id: str) -> dict[str, Any]:
         """Get health status for a load balancer pool.
@@ -2232,8 +2323,28 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of D1 database objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/d1/database")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(f"accounts/{self.account_id}/d1/database")
+
+    def fetch_d1_file_sizes(self, database_ids: list[str]) -> dict[str, int]:
+        """Fetch the storage size of D1 databases.
+
+        The database list has no size, so each database is read on its own (in parallel).
+
+        Args:
+            database_ids: List of database IDs
+
+        Returns:
+            Dictionary mapping database ID to its size in bytes (0 if it could not be read)
+        """
+
+        def fetch_single_file_size(current_db_id: str) -> int:
+            """Fetch the size of a single D1 database."""
+            result = self._rest_get(f"accounts/{self.account_id}/d1/database/{current_db_id}")
+            file_size = result.get("file_size") if isinstance(result, dict) else None
+            return int(file_size) if isinstance(file_size, (int, float)) else 0
+
+        results = parallel_map(fetch_single_file_size, database_ids, logger=self)
+        return {db_id: size if size is not None else 0 for db_id, size in results.items()}
 
     def fetch_d1_analytics(
         self,
@@ -2474,8 +2585,7 @@ class CloudflareClient(LoggerMixin):
         Returns:
             List of Pages project objects
         """
-        result = self._rest_get(f"accounts/{self.account_id}/pages/projects")
-        return result if isinstance(result, list) else []
+        return self._rest_get_paged(f"accounts/{self.account_id}/pages/projects")
 
     def get_pages_deployments(self, project_name: str, limit: int = 5) -> list[dict[str, Any]]:
         """Get deployments for a Pages project.

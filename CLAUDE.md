@@ -77,9 +77,9 @@ rule_spec = CheckParameters(
 
 ### Key Classes
 
-- `CloudflareClient` - Wraps REST (`_rest_get`) and GraphQL (`_graphql_query`) APIs with retry logic
+- `CloudflareClient` - Wraps REST (`_rest_get`, `_rest_get_paged` for lists with pages) and GraphQL (`_graphql_query`) APIs with retry logic. `AGENT_TIME_BUDGET` seconds into an agent run no more requests or retries are started; they fail right away as transient errors (`_request_with_retry()`). A request already running still ends after its own timeout
 - `CloudflareSection` - Abstract base requiring `name`, `resource_type`, `metrics`, `discover_resources()`, `fetch_analytics()`
-- `CloudflareOrchestrator` - Runs sections with two-tier caching (default discovery TTL: 1h, default metrics TTL: 5m; both configurable). After a transient API error (errors with `transient: True`: HTTP 5xx, 429, timeout, network, invalid JSON response) it keeps the discovery cache and serves the last good result (`fetched_at` at most `max(discovery TTL, 2 × metrics TTL)` old) with the current errors; that result is cached again with its old `fetched_at`, so the API is retried at the normal metrics TTL. Without usable last good data the fresh result is cached with `fetched_at` 0, so it never counts as last good data
+- `CloudflareOrchestrator` - Runs sections with two-tier caching (default discovery TTL: 1h, default metrics TTL: 5m; both configurable). After a transient API error (errors with `transient: True`: HTTP 5xx, 429, timeout, network, invalid JSON response, GraphQL errors worded "try again" or "Internal server error", failed discovery) it keeps the discovery cache and serves the last good result (`fetched_at` at most `max(discovery TTL, 2 × metrics TTL)` old) with the current errors; that result is cached again with its old `fetched_at`, so the API is retried at the normal metrics TTL. Without usable last good data the fresh result is cached with `fetched_at` 0, so it never counts as last good data
 - `ErrorCollector` - Structured error collection with categories and services (thread-safe)
 - `APICounter` - Tracks API request counts by type (thread-safe)
 
@@ -135,7 +135,9 @@ from ..lib.constants import (
     # Cache/Timeout
     DEFAULT_CACHE_TTL,          # 300 (5 minutes)
     DEFAULT_DISCOVERY_TTL,      # 3600 (1 hour)
-    DEFAULT_REQUEST_TIMEOUT,    # 30 seconds
+    DEFAULT_REQUEST_TIMEOUT,    # 10 seconds
+    AGENT_TIME_BUDGET,          # 45 seconds, then one agent run starts no more API requests
+    REST_MAX_PAGES,             # 100 (most pages read from one REST list)
     DEFAULT_MAX_RETRIES,        # 3
     DEFAULT_MAX_WORKERS,        # 8 (parallel API calls)
 
@@ -400,7 +402,7 @@ errors = self.error_collector.get_and_clear()  # Returns list[dict] and clears
     "service": "workers",    # Service name or "rest"/"graphql" for client errors
     "message": "Error text",
     "timestamp": 1734180000.0,
-    "transient": False       # True for HTTP 5xx, 429, timeout, network, invalid JSON: last good data is served
+    "transient": False       # True for HTTP 5xx, 429, timeout, network, invalid JSON, GraphQL "try again", failed discovery: last good data is served
 }
 ```
 
@@ -418,7 +420,7 @@ errors = self.error_collector.get_and_clear()  # Returns list[dict] and clears
 | Category | Description |
 |----------|-------------|
 | `api` | REST/GraphQL API errors (permission, rate limit, HTTP errors) |
-| `discovery` | Resource discovery errors (unknown service, missing resources) |
+| `discovery` | Resource discovery errors (unknown service, discovery failed with an exception) |
 | `metrics` | Metrics collection errors (failed analytics fetch) |
 | `cache` | Cache-related errors |
 
@@ -489,7 +491,7 @@ The agent output includes Check_MK cache metadata so users see cache info in the
 <<<cloudflare:sep(0):cached(1734180000,300)>>>
 ```
 
-- `1734180000` = Unix timestamp when data was fetched
+- `1734180000` = Unix timestamp when data was fetched (oldest `fetched_at` of the served services, `CloudflareConfig.fetched_at`)
 - `300` = Cache TTL in seconds (matches `--cache-ttl` argument)
 
 Check_MK automatically displays: "Cache vor X s erstellt, Cache-Intervall: 5 m"

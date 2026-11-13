@@ -13,7 +13,6 @@ from .constants import (
     DEFAULT_CACHE_TTL,
     DEFAULT_DISCOVERY_TTL,
     DEFAULT_TIMEFRAME,
-    ERROR_CATEGORY_API,
     ERROR_CATEGORY_DISCOVERY,
     ERROR_CATEGORY_METRICS,
 )
@@ -263,9 +262,8 @@ class CloudflareOrchestrator(LoggerMixin):
                 skipped_pro_features[service_name] = skipped_zones
             # Track services with no resources
             resources = result.get("resources", [])
-            # Check if any API errors occurred for this service
-            has_api_errors = any(e.get("category") == ERROR_CATEGORY_API for e in section_errors)
-            if not resources and not result.get("error") and not has_api_errors:
+            # An empty list after an error says nothing about the permission
+            if not resources and not result.get("error") and not section_errors:
                 # Map empty services to their required permissions
                 permission = CloudflareClient.SERVICE_PERMISSIONS.get(service_name)
                 if permission:
@@ -285,6 +283,16 @@ class CloudflareOrchestrator(LoggerMixin):
                 "cache_ttl": self.cache_ttl,
                 "discovery_ttl": self.discovery_ttl,
                 "timeframe": self.timeframe,
+                # Oldest fetch time of the served data (for the section's cache header);
+                # results without a usable fetch time (0) do not count
+                "fetched_at": min(
+                    (
+                        result["fetched_at"]
+                        for result in metrics_data.values()
+                        if result.get("fetched_at")
+                    ),
+                    default=time.time(),
+                ),
             },
         }
 

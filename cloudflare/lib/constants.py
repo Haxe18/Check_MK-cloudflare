@@ -32,6 +32,15 @@ DEFAULT_MAX_RETRIES = 3
 # if Cloudflare asks for a longer wait, the request is not retried
 RATE_LIMIT_MAX_WAIT = 10
 
+# Time (seconds) after which one agent run starts no more API requests. Later requests
+# (and retries) fail right away as temporary errors, so the agent can still answer
+# before Checkmk's special agent timeout (60s) and serve the last good data. A request
+# already running is not cut short, it ends after its own timeout
+AGENT_TIME_BUDGET = 45
+
+# Most pages read from one paginated REST list (guards against endless paging)
+REST_MAX_PAGES = 100
+
 # Default max workers for parallel API calls
 # Cloudflare rate limits: ~200 requests / 30 seconds = ~6.7 req/s
 # Using 8 workers is safe and provides good parallelism

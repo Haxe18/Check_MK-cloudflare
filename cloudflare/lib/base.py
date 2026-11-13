@@ -6,6 +6,7 @@ from typing import Any
 
 from .cache import APICounter
 from .client import CloudflareClient
+from .constants import ERROR_CATEGORY_DISCOVERY
 from .logger import LoggerMixin
 from .types import MetricDefinition, MetricResult, Resource
 
@@ -135,6 +136,14 @@ class CloudflareSection(ABC, LoggerMixin):
             self.log_info(f"Discovered {len(resources)} {self.resource_type}(s)")
         except Exception as exc:
             self.log_error(f"Discovery failed for {self.name}: {exc}")
+            # Report it and mark it temporary, so the empty list is not cached as the
+            # discovery result and the last good data is served
+            self.client.error_collector.add(
+                ERROR_CATEGORY_DISCOVERY,
+                self.name,
+                f"Discovery failed: {exc}",
+                transient=True,
+            )
             resources = []
 
         # Phase 2: Fetch analytics
