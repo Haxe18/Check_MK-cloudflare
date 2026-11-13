@@ -61,10 +61,15 @@ def parse_arguments() -> argparse.Namespace:
         description="Cloudflare monitoring special agent for Checkmk"
     )
 
-    parser.add_argument(
+    token_group = parser.add_mutually_exclusive_group(required=True)
+    token_group.add_argument(
         "--api-token",
-        required=True,
-        help="Cloudflare API token",
+        help="Cloudflare API token (visible in the process list, for manual tests)",
+    )
+    token_group.add_argument(
+        "--api-token-reference",
+        help="Cloudflare API token in the Checkmk password store, "
+        "as '<password id>:<password store file>' (set by Checkmk)",
     )
 
     parser.add_argument(
@@ -117,6 +122,22 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _read_api_token(token_reference: str) -> str:
+    """Read the API token from the Checkmk password store.
+
+    Args:
+        token_reference: '<password id>:<password store file>' as passed by Checkmk
+
+    Returns:
+        The API token
+    """
+    # Only available on a Checkmk site, so it is imported when needed
+    from cmk.utils.password_store import lookup  # pylint: disable=import-outside-toplevel
+
+    password_id, password_file = token_reference.split(":", 1)
+    return lookup(Path(password_file), password_id)
+
+
 def _print_cloudflare_section(payload: dict, cache_ttl: int) -> None:
     """Print Checkmk section header and JSON payload.
 
@@ -158,8 +179,9 @@ def main() -> None:
 
     # Create and run orchestrator
     try:
+        api_token = args.api_token or _read_api_token(args.api_token_reference)
         orchestrator = CloudflareOrchestrator(
-            api_token=args.api_token,
+            api_token=api_token,
             account_id=args.account_id,
             services=valid_services,
             cache_ttl=cache_ttl,

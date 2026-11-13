@@ -36,7 +36,8 @@ def _agent_arguments(
     if not api_token:
         return
 
-    args.extend(["--api-token", api_token.unsafe()])
+    # Passed as a password store reference, so the token is not in the process list
+    args.extend(["--api-token-reference", api_token])
 
     # Account ID (required)
     account_id = params.get("account_id")

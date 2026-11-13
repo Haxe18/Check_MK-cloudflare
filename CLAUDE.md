@@ -353,6 +353,10 @@ The plugin is uploaded via Check_MK WATO "Extension Packages" page.
 - Metrics: `payloadSize` (storage), `objectCount`
 - **Important**: These are snapshot metrics. The plugin forces a 24h query window to ensure the latest snapshot is found, as they may not appear in shorter windows.
 
+### API Token
+
+Checkmk passes the token as `--api-token-reference <password id>:<password store file>` and the agent reads it with `cmk.utils.password_store.lookup()`. `--api-token` takes the token itself and is only meant for manual tests, because it shows up in the process list.
+
 ## Error Handling
 
 ### Error Constants
