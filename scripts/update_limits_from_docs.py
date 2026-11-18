@@ -2,7 +2,7 @@
 """Refresh Cloudflare limit constants from docs markdown sources.
 
 Uses Gemini Flash to extract limit values from Cloudflare documentation
-discovered via llms.txt. All limit constants and doc URLs are discovered
+discovered via each product's llms.txt. All limit constants and doc URLs are discovered
 dynamically — adding a new FREE-tier constant to constants.py is enough.
 
 Usage:
@@ -29,14 +29,16 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from google import genai
-from google.genai.types import GenerateContentConfig
+from google.genai.types import GenerateContentConfig, HttpOptions, HttpRetryOptions
 
 log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONSTANTS_PATH = REPO_ROOT / "cloudflare/lib/constants.py"
-LLMS_URL = "https://developers.cloudflare.com/llms.txt"
-GEMINI_MODEL = "gemini-3-flash-preview"
+# The root llms.txt only links to one llms.txt per product; the pricing and
+# limits pages are listed there.
+PRODUCT_LLMS_URL = "https://developers.cloudflare.com/{service}/llms.txt"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 
 def discover_limit_constants(constants_text: str) -> tuple[dict[str, int], set[str]]:
@@ -98,7 +100,7 @@ def discover_doc_urls(llms_text: str, needed_services: set[str]) -> dict[str, st
     URL found per service+type wins to avoid overwrites by sub-path variants.
 
     Args:
-        llms_text: Raw contents of Cloudflare's ``llms.txt``.
+        llms_text: Raw contents of a Cloudflare product's ``llms.txt``.
         needed_services: Service names to look for (e.g. ``{"d1", "kv"}``).
 
     Returns:
@@ -161,7 +163,16 @@ def extract_limits_via_llm(
         ValueError: If the LLM response is missing keys or contains
             invalid (non-positive / non-integer) values.
     """
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    # Gemini answers 503 "high demand" for minutes at a time. The SDK default
+    # gives up after ~15 s; this keeps retrying for ~4 minutes. Without a timeout
+    # a request that never gets an answer hangs forever; timeouts are retried too.
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=HttpOptions(
+            timeout=180_000,  # ms per request
+            retry_options=HttpRetryOptions(attempts=8, initial_delay=2, max_delay=120),
+        ),
+    )
 
     docs_text = "\n\n".join(f"=== {name} ===\n{content}" for name, content in raw_docs.items())
 
@@ -344,8 +355,13 @@ def main(argv: list[str]) -> int:
         needed_services = _services_from_constants(existing_keys)
         log.debug("Needed services: %s", sorted(needed_services))
 
-        llms_text = fetch_url(LLMS_URL)
-        doc_urls = discover_doc_urls(llms_text, needed_services)
+        doc_urls: dict[str, str] = {}
+        for service in sorted(needed_services):
+            llms_text = fetch_url(PRODUCT_LLMS_URL.format(service=service))
+            service_urls = discover_doc_urls(llms_text, {service})
+            if not service_urls:
+                raise ValueError(f"No pricing/limits doc URLs found for {service}")
+            doc_urls.update(service_urls)
         log.debug("Found %d pricing/limits doc URLs", len(doc_urls))
         log.debug("Doc URLs: %s", json.dumps(doc_urls, indent=2))
 
