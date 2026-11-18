@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -18,6 +19,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # GitHub disables scheduled workflows after 60 days without repo activity.
+      # Enabling it again on every run resets that timer.
+      - name: Keep schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/monthly-limits-check.yml/enable"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:

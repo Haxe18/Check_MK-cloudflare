@@ -187,7 +187,7 @@ cloudflare/
 
 The repository includes two GitHub Actions for monthly limit maintenance:
 
-- `monthly-limits-check.yml`: runs on the 1st day of each month, refreshes Cloudflare limit constants from docs, and opens/updates a PR if changes are detected.
+- `monthly-limits-check.yml`: runs on the 1st day of each month, refreshes Cloudflare limit constants from docs, and opens/updates a PR if changes are detected. Each run enables the workflow again through the API, so GitHub does not turn the schedule off after 60 days without repo activity.
 - `tag-on-merged-limits-pr.yml`: after merging that PR, creates the next patch tag (`vX.Y.Z`) on the merge commit.
 
 The existing release workflow (`release.yml`) already triggers on `v*` tags, so merging a monthly limits PR can automatically create a new release.
