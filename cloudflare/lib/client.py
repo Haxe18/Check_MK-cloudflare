@@ -823,7 +823,9 @@ class CloudflareClient(LoggerMixin):
                 for address, origin_health in origin.items():
                     entry = origins.setdefault(address, {"healthy": True, "rtt": 0.0})
                     entry["healthy"] = entry["healthy"] and bool(origin_health.get("healthy"))
-                    entry["rtt"] = max(entry["rtt"], self._rtt_milliseconds(origin_health.get("rtt")))
+                    entry["rtt"] = max(
+                        entry["rtt"], self._rtt_milliseconds(origin_health.get("rtt"))
+                    )
 
         return {
             "healthy": bool(pops) and all(pop.get("healthy", False) for pop in pops),
@@ -1562,9 +1564,7 @@ class CloudflareClient(LoggerMixin):
             "latency_p99": 0.0,
         }
         for ns_key, ns_result in results.items():
-            analytics[ns_key] = (
-                ns_result if ns_result is not None else empty_analytics.copy()
-            )
+            analytics[ns_key] = ns_result if ns_result is not None else empty_analytics.copy()
 
         return analytics
 
@@ -1747,9 +1747,7 @@ class CloudflareClient(LoggerMixin):
         empty_monthly: dict[str, int] = {"reads": 0, "writes": 0, "lists": 0, "deletes": 0}
         analytics: dict[str, dict[str, int]] = {}
         for ns_key, ns_result in results.items():
-            analytics[ns_key] = (
-                ns_result if ns_result is not None else empty_monthly.copy()
-            )
+            analytics[ns_key] = ns_result if ns_result is not None else empty_monthly.copy()
 
         return analytics
 
@@ -2120,9 +2118,7 @@ class CloudflareClient(LoggerMixin):
         # Convert results, handling None for failed fetches
         analytics: dict[str, dict[str, Any]] = {}
         for zone_key, zone_result in results.items():
-            analytics[zone_key] = (
-                zone_result if zone_result is not None else empty_analytics.copy()
-            )
+            analytics[zone_key] = zone_result if zone_result is not None else empty_analytics.copy()
 
         return analytics
 
@@ -2356,9 +2352,7 @@ class CloudflareClient(LoggerMixin):
         }
         analytics: dict[str, dict[str, Any]] = {}
         for zone_key, zone_result in results.items():
-            analytics[zone_key] = (
-                zone_result if zone_result is not None else empty_analytics.copy()
-            )
+            analytics[zone_key] = zone_result if zone_result is not None else empty_analytics.copy()
 
         return analytics
 
